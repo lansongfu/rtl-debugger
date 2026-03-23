@@ -1,0 +1,52 @@
+{
+  "name": "rtl-debugger",
+  "version": "1.1.0",
+  "description": "RTL 波形分析调试工具 - 智能定位 RTL 设计问题",
+  "author": "木叶村克劳",
+  "license": "MIT",
+  "keywords": ["RTL", "Verilog", "debug", "waveform", "VCD", "AI"],
+  "python_version": ">=3.10",
+  "dependencies": [
+    "vcdvcd"
+  ],
+  "entry_points": {
+    "console_scripts": [
+      "rtl-debug=tools.interactive_debug_analyzer:main",
+      "rtl-query=tools.rtl_query:main",
+      "vcd-query=tools.vcd_query:main",
+      "rtl-trace=tools.interactive_debugger:main"
+    ]
+  },
+  "trigger_words": [
+    "rtl-debug",
+    "rtl-query",
+    "rtl-trace",
+    "vcd-query",
+    "波形分析",
+    "时序调试",
+    "RTL 调试",
+    "信号分析",
+    "debug rtl",
+    "analyze waveform"
+  ],
+  "auto_trigger_phrases": [
+    "调试.*信号",
+    "分析.*波形",
+    "为什么.*不跳",
+    "时序.*问题",
+    "CDC.*问题",
+    "跨时钟域",
+    "追踪.*依赖",
+    "一路.*追"
+  ],
+  "features": [
+    "RTL 信号依赖分析",
+    "VCD 波形查询",
+    "智能 Bug 诊断（14 种模式）",
+    "时序错拍检测",
+    "跨时钟域分析",
+    "真正的交互式调试（迭代追踪）"
+  ],
+  "test_coverage": "15/15 通过 (100%)",
+  "usage_example": "./venv/bin/python tools/interactive_debugger.py <signal> --filelist <filelist.f> --vcd <waveform.vcd> --expected '<expected_behavior>'"
+}

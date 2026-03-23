@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.py[cod]
+venv/
+*.egg-info/
+
+# 大文件
+*.vcd
+*.fsdb
+*.shm
+*.vvp
+
+# 其他
+*.log
+.DS_Store
