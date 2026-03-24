@@ -1,7 +1,7 @@
 {
   "name": "rtl-debugger",
-  "version": "1.1.0",
-  "description": "RTL 波形分析调试工具 - 智能定位 RTL 设计问题",
+  "version": "1.2.0",
+  "description": "RTL 波形分析调试工具 v5 - 智能流式查询，时间窗口迭代追踪",
   "author": "木叶村克劳",
   "license": "MIT",
   "keywords": ["RTL", "Verilog", "debug", "waveform", "VCD", "AI"],
@@ -14,6 +14,7 @@
       "rtl-debug=tools.interactive_debug_analyzer:main",
       "rtl-query=tools.rtl_query:main",
       "vcd-query=tools.vcd_query:main",
+      "vcd-smart=tools.vcd_smart:main",
       "rtl-trace=tools.interactive_debugger:main"
     ]
   },
@@ -41,7 +42,10 @@
   ],
   "features": [
     "RTL 信号依赖分析",
-    "VCD 波形查询",
+    "VCD 智能流式查询 (v5)",
+    "时间窗口查询 (0.2-2ms)",
+    "异常窗口自动定位",
+    "迭代追踪依赖信号",
     "智能 Bug 诊断（14 种模式）",
     "时序错拍检测",
     "跨时钟域分析",
