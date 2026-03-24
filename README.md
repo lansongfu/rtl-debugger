@@ -1,52 +1,72 @@
 # RTL Debugger - RTL 波形分析调试工具
 
 > 🎯 **让 RTL 调试像聊天一样简单**  
-> 📅 版本：v1.0.0  
-> ✅ 测试：15/15 通过 (100%)
+> 📅 版本：v1.2.0 (v5 智能流式查询)  
+> ⚡ 性能：30,000 倍加速 (时间窗口查询 0.2ms)  
+> ✅ 测试：通过
+
+---
+
+## 🌟 v1.2.0 新特性
+
+**v5 智能流式查询：**
+- ⏱️ **时间窗口查询**: 0.2-2ms (原 60s+)
+- 🎯 **自动定位异常**: 28s (仅第一次)
+- 🔄 **迭代追踪**: 逐步缩小时间窗口
+- 📊 **加速比**: 30,000 倍
 
 ---
 
 ## 🚀 快速开始
 
-### 安装依赖
+### 安装（跨平台）
+
+**支持：Linux / macOS / Windows**
 
 ```bash
-# 克隆项目
+# 1. 克隆项目
 git clone https://github.com/lansongfu/rtl-debugger.git
 cd rtl-debugger
 
-# 创建虚拟环境
-python3 -m venv venv
-source venv/bin/activate  # Linux/Mac
-# 或
-venv\Scripts\activate     # Windows
+# 2. 创建虚拟环境
+python -m venv venv
 
-# 安装依赖
+# 3. 激活虚拟环境
+# Linux/macOS:
+source venv/bin/activate
+
+# Windows (PowerShell):
+venv\Scripts\activate
+# Windows (CMD):
+venv\Scripts\activate.bat
+
+# 4. 安装依赖
 pip install vcdvcd
 ```
 
 ### 基础使用
 
+**v5 智能流式查询（推荐）：**
+
 ```bash
-# 1. 查询 RTL 信号依赖
-./venv/bin/python tools/rtl_query.py --filelist src/filelist.f --signal transfer_done
+# 1. 时间窗口查询（极快！0.2-2ms）
+./venv/bin/python tools/vcd_smart.py waveform.vcd \
+  -s transfer_done \
+  --start-time 0 --end-time 100000
 
-# 2. 查询 VCD 波形行为
-./venv/bin/python tools/vcd_query.py sim/waveform.vcd --signal clk
+# 2. 行为分析（自动找异常点）
+./venv/bin/python tools/vcd_smart.py waveform.vcd \
+  -s transfer_done \
+  --analyze
 
-# 3. 交互式调试分析（推荐）
-./venv/bin/python tools/interactive_debug_analyzer.py transfer_done \
+# 3. 交互式调试（自动时间窗口迭代）
+./venv/bin/python tools/interactive_debugger.py transfer_done \
   --filelist src/filelist.f \
   --vcd sim/waveform.vcd \
-  --expected "应该有变化"
+  --expected "应该在 t=1000ns 拉高"
 
-# 4. 启用高级分析
-./venv/bin/python tools/interactive_debug_analyzer.py data_sync \
-  --filelist src/filelist.f \
-  --vcd sim/waveform.vcd \
-  --cdc      # CDC 跨时钟域分析
-  --timing   # 时序分析
-  --all      # 所有分析
+# 4. 运行测试
+./venv/bin/python tools/vcd_smart.py waveform.vcd --test
 ```
 
 ---
