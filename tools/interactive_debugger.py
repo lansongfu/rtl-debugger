@@ -40,6 +40,7 @@ class InteractiveDebugger:
         self.max_depth = 20  # 最大深度
         self.vcd_loaded = False  # VCD 是否已加载
         self.anomaly_window = None  # 异常时间窗口（用户未指定时自动定位）
+        self.skill_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # Skill 根目录
         
     def locate_anomaly_window(self, signal_name):
         """
@@ -52,13 +53,17 @@ class InteractiveDebugger:
         """
         cmd = [
             sys.executable,
-            os.path.join(skill_dir, 'tools', 'vcd_smart.py'),
+            os.path.join(self.skill_dir, 'tools', 'vcd_smart.py'),
             self.vcd_file,
             '--signal', signal_name,
             '--analyze'
         ]
         
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        # Windows 兼容：添加 shell=True
+        if sys.platform == 'win32':
+            result = subprocess.run(cmd, capture_output=True, text=True, shell=True)
+        else:
+            result = subprocess.run(cmd, capture_output=True, text=True)
         
         # 解析首次变化时间
         for line in result.stdout.split('\n'):
@@ -79,12 +84,16 @@ class InteractiveDebugger:
         """查询 RTL 依赖"""
         cmd = [
             sys.executable,
-            os.path.join(skill_dir, 'tools', 'rtl_query.py'),
+            os.path.join(self.skill_dir, 'tools', 'rtl_query.py'),
             '--filelist', self.filelist,
             '--signal', signal_name
         ]
         
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        # Windows 兼容：添加 shell=True
+        if sys.platform == 'win32':
+            result = subprocess.run(cmd, capture_output=True, text=True, shell=True)
+        else:
+            result = subprocess.run(cmd, capture_output=True, text=True)
         
         # 解析依赖
         deps = []
@@ -108,7 +117,7 @@ class InteractiveDebugger:
         """
         cmd = [
             sys.executable,
-            os.path.join(skill_dir, 'tools', 'vcd_smart.py'),
+            os.path.join(self.skill_dir, 'tools', 'vcd_smart.py'),
             self.vcd_file,
             '--signal', signal_name,
         ]
@@ -120,7 +129,11 @@ class InteractiveDebugger:
             # 否则做行为分析
             cmd.append('--analyze')
         
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        # Windows 兼容：添加 shell=True
+        if sys.platform == 'win32':
+            result = subprocess.run(cmd, capture_output=True, text=True, shell=True)
+        else:
+            result = subprocess.run(cmd, capture_output=True, text=True)
         
         # 解析行为（只保留关键信息）
         output = result.stdout.strip()
