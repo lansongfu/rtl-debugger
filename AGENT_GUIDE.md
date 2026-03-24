@@ -16,21 +16,33 @@ git clone https://github.com/lansongfu/rtl-debugger.git
 cd rtl-debugger
 
 # 安装依赖
-python -m venv venv
-pip install vcdvcd
+pip install -r requirements.txt
 ```
 
-### 2. 导入工具
+### 2. 导入工具（标准方式）
 
 ```python
-# 基础查询（快速定位）
-from tools.vcd_smart import VCDSmartStream
+# 标准导入（推荐）
+from rtl_debugger import analyze_axi4, analyze_pulse, InteractiveDebugger
 
-# 深度分析（信号分析）
-from tools.vcd_analyze import analyze_pulse, analyze_clock, analyze_bus, analyze_fsm
+# 使用
+result = analyze_axi4('waveform.vcd', signals)
+```
 
-# 交互式调试（自动追踪）
-from tools.interactive_debugger import InteractiveDebugger
+### 3. 命令行使用
+
+```bash
+# 脉冲分析
+python -m rtl_debugger analyze-pulse waveform.vcd signal_name
+
+# 时钟分析
+python -m rtl_debugger analyze-clock waveform.vcd clk
+
+# AXI4 分析
+python -m rtl_debugger analyze-axi waveform.vcd --prefix axi
+
+# 快速查询
+python -m rtl_debugger query waveform.vcd signal_name --start-time 0 --end-time 100000
 ```
 
 ---

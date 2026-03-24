@@ -1,1 +1,7 @@
+# RTL Debugger 依赖
+# 安装：pip install -r requirements.txt
+
 vcdvcd>=1.0.0
+
+# Windows 兼容性（可选，Python 3.10+ 已包含）
+# colorama>=0.4.6; sys_platform == 'win32'
