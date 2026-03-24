@@ -24,7 +24,7 @@ sys.path.insert(0, os.path.join(skill_dir, 'venv/lib/python3.12/site-packages'))
 
 
 class InteractiveDebugger:
-    """真正的交互式调试器"""
+    """真正的交互式调试器（v5 智能流式查询）"""
     
     def __init__(self, filelist, vcd_file):
         self.filelist = filelist
@@ -33,6 +33,41 @@ class InteractiveDebugger:
         self.trace_path = []  # 追踪路径
         self.max_depth = 20  # 最大深度
         self.vcd_loaded = False  # VCD 是否已加载
+        self.anomaly_window = None  # 异常时间窗口（用户未指定时自动定位）
+        
+    def locate_anomaly_window(self, signal_name):
+        """
+        定位异常时间窗口（用户未指定时间时使用）
+        
+        策略：
+        1. 全时间扫描信号行为
+        2. 找到第一个异常点
+        3. 返回窗口（异常点 ±100ns）
+        """
+        cmd = [
+            sys.executable,
+            os.path.join(skill_dir, 'tools', 'vcd_smart.py'),
+            self.vcd_file,
+            '--signal', signal_name,
+            '--analyze'
+        ]
+        
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        
+        # 解析首次变化时间
+        for line in result.stdout.split('\n'):
+            if '首次变化：t=' in line:
+                match = re.search(r'首次变化：t=(\d+) ps', line)
+                if match:
+                    first_change = int(match.group(1))
+                    tolerance = 100000  # 100ns
+                    self.anomaly_window = (
+                        max(0, first_change - tolerance),
+                        first_change + tolerance
+                    )
+                    return self.anomaly_window
+        
+        return None
         
     def query_rtl(self, signal_name):
         """查询 RTL 依赖"""
@@ -56,14 +91,28 @@ class InteractiveDebugger:
         
         return deps
     
-    def query_vcd(self, signal_name):
-        """查询 VCD 行为"""
+    def query_vcd(self, signal_name, start_time=None, end_time=None):
+        """
+        查询 VCD 行为（使用智能流式查询 v5）
+        
+        Args:
+            signal_name: 信号名
+            start_time: 开始时间 (ps)，None 表示从头开始
+            end_time: 结束时间 (ps)，None 表示查到末尾
+        """
         cmd = [
             sys.executable,
-            os.path.join(skill_dir, 'tools', 'vcd_query.py'),
+            os.path.join(skill_dir, 'tools', 'vcd_smart.py'),
             self.vcd_file,
-            '--signal', signal_name
+            '--signal', signal_name,
         ]
+        
+        # 如果指定时间窗口，使用窗口查询
+        if start_time is not None and end_time is not None:
+            cmd.extend(['--start-time', str(start_time), '--end-time', str(end_time)])
+        else:
+            # 否则做行为分析
+            cmd.append('--analyze')
         
         result = subprocess.run(cmd, capture_output=True, text=True)
         
@@ -73,7 +122,7 @@ class InteractiveDebugger:
         # 提取行为描述
         behavior_line = ""
         for line in output.split('\n'):
-            if '始终为' in line or '始终无变化' in line or '变化' in line:
+            if '始终为' in line or '始终无变化' in line or '变化' in line or '行为：' in line:
                 behavior_line = line.strip()
                 break
         
@@ -85,9 +134,9 @@ class InteractiveDebugger:
             match = re.search(r'始终为 (\d+)', behavior_line)
             value = match.group(1) if match else 'unknown'
             return {'behavior': 'constant', 'value': value, 'raw': behavior_line}
-        elif '始终无变化' in behavior_line:
+        elif '始终无变化' in behavior_line or 'silent' in behavior_line:
             return {'behavior': 'silent', 'value': None, 'raw': behavior_line}
-        elif '变化' in behavior_line:
+        elif '变化' in behavior_line or 'toggling' in behavior_line:
             return {'behavior': 'toggling', 'value': None, 'raw': behavior_line}
         else:
             return {'behavior': 'unknown', 'value': None, 'raw': behavior_line}
@@ -108,16 +157,18 @@ class InteractiveDebugger:
         
         return False, None
     
-    def debug(self, target_signal, expected=None, depth=0):
+    def debug(self, target_signal, expected=None, time_window=None, depth=0):
         """
-        交互式调试核心方法
+        交互式调试核心方法（v5 智能流式查询）
         
-        这才是真正的 AI 调试过程：
-        1. 查 RTL 依赖
-        2. 查 VCD 行为
-        3. 判断是否异常
-        4. 如果异常，继续追依赖
-        5. 直到根因
+        策略：
+        1. 用户指定时间窗口 → 直接使用
+        2. 用户未指定 → 先定位异常窗口
+        3. 查 RTL 依赖
+        4. 查 VCD 行为（时间窗口内）
+        5. 判断是否异常
+        6. 如果异常，继续追依赖（同一窗口或提前窗口）
+        7. 直到根因
         """
         
         # 防止无限递归
@@ -130,6 +181,16 @@ class InteractiveDebugger:
         print(f"\n{indent}🔍 步骤 {len(self.trace_path) + 1}: 分析 {target_signal}")
         self.trace_path.append(target_signal)
         
+        # 如果用户未指定时间窗口，第一次调用时定位
+        if time_window is None and self.anomaly_window is None and expected:
+            print(f"{indent}   🕒 用户未指定时间窗口，正在定位异常点...")
+            self.locate_anomaly_window(target_signal)
+            if self.anomaly_window:
+                time_window = self.anomaly_window
+                print(f"{indent}   ✅ 定位异常窗口：t={time_window[0]}-{time_window[1]} ps")
+            else:
+                print(f"{indent}   ⚠️  未找到异常窗口，使用全时间窗口")
+        
         # Step 1: 查 RTL 依赖
         print(f"{indent}   📊 查询 RTL 依赖...")
         deps = self.query_rtl(target_signal)
@@ -138,9 +199,13 @@ class InteractiveDebugger:
         else:
             print(f"{indent}   📝 无依赖（叶信号）")
         
-        # Step 2: 查 VCD 行为
+        # Step 2: 查 VCD 行为（时间窗口内）
         print(f"{indent}   📈 查询 VCD 行为...")
-        vcd_result = self.query_vcd(target_signal)
+        if time_window:
+            print(f"{indent}   🕒 时间窗口：t={time_window[0]}-{time_window[1]} ps")
+            vcd_result = self.query_vcd(target_signal, time_window[0], time_window[1])
+        else:
+            vcd_result = self.query_vcd(target_signal)
         print(f"{indent}   📝 行为：{vcd_result['raw']}")
         
         # Step 3: 判断是否异常
@@ -153,9 +218,15 @@ class InteractiveDebugger:
             if deps:
                 print(f"{indent}   🔗 继续追踪依赖...")
                 
+                # 计算下一个时间窗口（提前 100ns）
+                next_window = None
+                if time_window:
+                    advance = 100000  # 100ns
+                    next_window = (max(0, time_window[0] - advance), time_window[1])
+                
                 # 对每个依赖递归调试
                 for dep in deps:
-                    result = self.debug(dep, expected, depth + 1)
+                    result = self.debug(dep, expected, next_window, depth + 1)
                     
                     # 如果找到根因，返回
                     if result['status'] == 'root_cause':
