@@ -1,0 +1,513 @@
+# RTL Debugger - Agent 使用指南
+
+> 🎯 **让 AI Agent 都能使用的 RTL 调试工具**  
+> 📚 版本：v1.2.0  
+> ⚡ 性能：毫秒级查询，30,000 倍加速
+
+---
+
+## 📖 快速开始
+
+### 1. 安装 Skill
+
+```bash
+# 克隆仓库
+git clone https://github.com/lansongfu/rtl-debugger.git
+cd rtl-debugger
+
+# 安装依赖
+python -m venv venv
+pip install vcdvcd
+```
+
+### 2. 导入工具
+
+```python
+# 基础查询（快速定位）
+from tools.vcd_smart import VCDSmartStream
+
+# 深度分析（信号分析）
+from tools.vcd_analyze import analyze_pulse, analyze_clock, analyze_bus, analyze_fsm
+
+# 交互式调试（自动追踪）
+from tools.interactive_debugger import InteractiveDebugger
+```
+
+---
+
+## 🛠️ 核心功能
+
+### 功能 1: 时间窗口查询（最快！0.2-2ms）
+
+**使用场景：** 已知问题时间范围，快速查看信号行为
+
+```python
+from tools.vcd_smart import VCDSmartStream
+
+with VCDSmartStream('waveform.vcd') as q:
+    q.parse_header_fast()
+    
+    # 查询指定时间窗口
+    changes = q.query_window('transfer_done', 
+                             start_time=0, 
+                             end_time=100000)  # ps
+    
+    print(f"找到 {len(changes)} 次变化:")
+    for time, value in changes[:5]:
+        print(f"  t={time}ps: {value}")
+```
+
+**返回示例：**
+```
+找到 3 次变化:
+  t=0ps: 0
+  t=50000ps: 1
+  t=100000ps: 0
+```
+
+---
+
+### 功能 2: 行为分析（快速判断）
+
+**使用场景：** 快速判断信号是否正常
+
+```python
+from tools.vcd_smart import VCDSmartStream
+
+with VCDSmartStream('waveform.vcd') as q:
+    q.parse_header_fast()
+    
+    # 分析信号行为
+    behavior = q.analyze_behavior('clk', 0, 1000000)
+    
+    print(f"行为：{behavior['behavior']}")
+    # silent: 始终无变化
+    # constant: 恒定值
+    # toggling: 跳变
+    # pulse: 脉冲
+```
+
+---
+
+### 功能 3: 脉冲分析
+
+**使用场景：** 分析脉冲宽度、周期、占空比
+
+```python
+from tools.vcd_analyze import analyze_pulse
+
+result = analyze_pulse('waveform.vcd', 
+                       signal='interrupt',
+                       window=(0, 1000000))
+
+print(f"脉冲数量：{result['pulse_count']}")
+print(f"最小脉宽：{result['min_width_ps']} ps")
+print(f"最大脉宽：{result['max_width_ps']} ps")
+print(f"平均脉宽：{result['avg_width_ps']} ps")
+print(f"占空比：{result['duty_cycle']:.2%}")
+```
+
+**返回数据结构：**
+```json
+{
+  "pulse_count": 10,
+  "min_width_ps": 1000,
+  "max_width_ps": 5000,
+  "avg_width_ps": 2500,
+  "periods_ps": [10000, 10000, 10000],
+  "duty_cycle": 0.25,
+  "first_pulse_ps": 1000,
+  "last_pulse_ps": 95000
+}
+```
+
+---
+
+### 功能 4: 时钟分析
+
+**使用场景：** 分析时钟频率、抖动、稳定性
+
+```python
+from tools.vcd_analyze import analyze_clock
+
+result = analyze_clock('waveform.vcd', 
+                       signal='clk',
+                       window=(0, 1000000))
+
+print(f"频率：{result['frequency_mhz']:.2f} MHz")
+print(f"周期：{result['period_ps']:.2f} ps")
+print(f"占空比：{result['duty_cycle']:.2%}")
+print(f"抖动：{result['jitter_ps']:.2f} ps")
+print(f"稳定：{result['stable']}")
+```
+
+**返回数据结构：**
+```json
+{
+  "frequency_mhz": 100.5,
+  "period_ps": 9950.2,
+  "duty_cycle": 0.5,
+  "jitter_ps": 50.3,
+  "stable": true,
+  "edges": [(1000, 'rising'), (5000, 'falling'), ...],
+  "edge_count": 200
+}
+```
+
+---
+
+### 功能 5: 总线分析
+
+**使用场景：** 分析 AXI/APB/AHB总线事务
+
+```python
+from tools.vcd_analyze import analyze_bus
+
+result = analyze_bus('waveform.vcd', 
+                     signals={
+                         'data': 'wdata[31:0]',
+                         'valid': 'wvalid',
+                         'ready': 'wready'
+                     },
+                     window=(0, 1000000))
+
+print(f"事务数：{result['transaction_count']}")
+print(f"Burst 数：{result['burst_count']}")
+print(f"平均 Burst 长度：{result['avg_burst_len']:.2f}")
+print(f"总线利用率：{result['utilization']:.2%}")
+print(f"停顿次数：{result['stalls']}")
+print(f"平均延迟：{result['avg_latency_ps']:.2f} ps")
+```
+
+**返回数据结构：**
+```json
+{
+  "transactions": [
+    {
+      "start_time": 1000,
+      "end_time": 5000,
+      "transfers": 4,
+      "stalls": 1,
+      "latency_ps": 4000
+    }
+  ],
+  "transaction_count": 10,
+  "burst_count": 5,
+  "avg_burst_len": 3.2,
+  "utilization": 0.75,
+  "stalls": 3,
+  "avg_latency_ps": 4500.0
+}
+```
+
+---
+
+### 功能 6: 状态机分析
+
+**使用场景：** 分析状态机状态转移、检测死循环
+
+```python
+from tools.vcd_analyze import analyze_fsm
+
+result = analyze_fsm('waveform.vcd', 
+                     state_signals=['state[0]', 'state[1]', 'state[2]'],
+                     window=(0, 1000000))
+
+print(f"访问状态：{result['states_visited']}")
+print(f"唯一状态数：{result['unique_states']}")
+print(f"状态转移数：{len(result['transitions'])}")
+print(f"循环检测：{result['loops']}")
+print(f"死状态：{result['dead_states']}")
+```
+
+**返回数据结构：**
+```json
+{
+  "states_visited": ["000", "001", "010", "100"],
+  "state_encoding": {
+    "STATE_0": "000",
+    "STATE_1": "001",
+    "STATE_2": "010",
+    "STATE_3": "100"
+  },
+  "transitions": [
+    {"from": "000", "to": "001", "time_ps": 1000},
+    {"from": "001", "to": "010", "time_ps": 2000}
+  ],
+  "loops": [{"states": ["001", "010"], "count": 5}],
+  "dead_states": ["100"],
+  "unique_states": 4
+}
+```
+
+---
+
+### 功能 7: 交互式调试（自动追踪根因）
+
+**使用场景：** 给定异常信号，自动追踪依赖找到根因
+
+```python
+from tools.interactive_debugger import InteractiveDebugger
+
+debugger = InteractiveDebugger(
+    filelist='design.f',
+    vcd_file='waveform.vcd'
+)
+
+# 自动调试
+debugger.run(
+    target_signal='transfer_done',
+    expected='应该在 t=1000ns 拉高'
+)
+```
+
+**输出示例：**
+```
+================================================================================
+🔍 交互式调试：transfer_done
+================================================================================
+📋 预期行为：应该在 t=1000ns 拉高
+
+🚀 开始追踪...
+
+🔍 步骤 1: 分析 transfer_done
+   🕒 定位异常窗口：t=0-100000 ps
+   📊 查询 RTL 依赖...
+   📝 依赖：all_b_received, b_valid
+   📈 查询 VCD 行为...
+   📝 行为：始终为 0 (恒定信号)
+   ⚠️  发现异常：信号始终为 0，但预期应该有变化
+   🔗 继续追踪依赖...
+
+  🔍 步骤 2: 分析 all_b_received
+     📊 查询 RTL 依赖...
+     📝 依赖：b_valid
+     📈 查询 VCD 行为...
+     📝 行为：始终为 0
+     ⚠️  发现异常...
+
+  🔍 步骤 3: 分析 b_valid
+     📊 查询 RTL 依赖...
+     📝 无依赖（叶信号）
+     📈 查询 VCD 行为...
+     📝 行为：始终为 0
+     ⚠️  发现异常：b_valid 控制逻辑问题
+
+================================================================================
+🎯 调试结果
+================================================================================
+
+🔴 找到根因：b_valid
+   行为：始终为 0
+   原因：b_valid 控制逻辑问题
+
+📋 追踪路径：
+   1. transfer_done
+   2. all_b_received
+   3. b_valid
+
+💡 建议：
+   1. 检查 b_valid 的驱动逻辑
+   2. 查看相关控制信号
+   3. 对比 RTL 预期和 VCD 实际
+```
+
+---
+
+## 🎯 典型使用场景
+
+### 场景 1: 用户指定时间窗口
+
+```python
+# 用户："transfer_done 在 t=1000ns 应该拉高，但没反应"
+
+from tools.vcd_smart import VCDSmartStream
+
+with VCDSmartStream('waveform.vcd') as q:
+    q.parse_header_fast()
+    
+    # 查询问题窗口
+    changes = q.query_window('transfer_done', 900000, 1100000)
+    
+    if not changes or all(v == '0' for t, v in changes):
+        print("❌ 信号确实没有拉高")
+        
+        # 查询依赖信号
+        deps = ['all_b_received', 'b_valid']
+        for dep in deps:
+            dep_changes = q.query_window(dep, 900000, 1100000)
+            print(f"{dep}: {len(dep_changes)} 次变化")
+```
+
+---
+
+### 场景 2: 用户未指定时间
+
+```python
+# 用户："中断信号异常拉高了，怎么回事？"
+
+from tools.vcd_smart import VCDSmartStream
+
+with VCDSmartStream('waveform.vcd') as q:
+    q.parse_header_fast()
+    
+    # 先找异常点
+    behavior = q.analyze_behavior('interrupt', 0, None)
+    
+    if behavior['first_change']:
+        t = behavior['first_change']
+        print(f"✅ 首次异常：t={t} ps")
+        
+        # 查询异常窗口
+        window = (max(0, t - 100000), t + 100000)
+        changes = q.query_window('interrupt', window[0], window[1])
+        print(f"窗口内行为：{changes}")
+```
+
+---
+
+### 场景 3: 时钟质量分析
+
+```python
+# 用户："这个时钟信号稳定吗？"
+
+from tools.vcd_analyze import analyze_clock
+
+result = analyze_clock('waveform.vcd', 'clk')
+
+if result['stable']:
+    print(f"✅ 时钟稳定：{result['frequency_mhz']:.2f} MHz")
+else:
+    print(f"⚠️  时钟不稳定！")
+    print(f"   频率：{result['frequency_mhz']:.2f} MHz")
+    print(f"   抖动：{result['jitter_ps']:.2f} ps")
+    print(f"   占空比：{result['duty_cycle']:.2%}")
+```
+
+---
+
+### 场景 4: 总线性能分析
+
+```python
+# 用户："AXI 总线性能怎么样？"
+
+from tools.vcd_analyze import analyze_bus
+
+result = analyze_bus('waveform.vcd', {
+    'data': 'wdata[31:0]',
+    'valid': 'wvalid',
+    'ready': 'wready'
+})
+
+print(f"📊 总线性能报告:")
+print(f"   事务数：{result['transaction_count']}")
+print(f"   Burst 数：{result['burst_count']}")
+print(f"   利用率：{result['utilization']:.2%}")
+print(f"   平均延迟：{result['avg_latency_ps']/1000:.2f} ns")
+
+if result['stalls'] > 0:
+    print(f"⚠️  检测到 {result['stalls']} 次停顿")
+```
+
+---
+
+## 📊 性能参考
+
+| 功能 | 数据量 | 预期耗时 |
+|------|--------|---------|
+| 时间窗口查询 | 100ns 窗口 | **0.2ms** |
+| 时间窗口查询 | 1μs 窗口 | **0.4ms** |
+| 时间窗口查询 | 10μs窗口 | **2.0ms** |
+| 脉冲分析 | 100 个脉冲 | **1-5ms** |
+| 时钟分析 | 1000 个周期 | **5-10ms** |
+| 总线分析 | 100 次事务 | **10-50ms** |
+| 状态机分析 | 复杂状态机 | **50-100ms** |
+| 全时间扫描 | 512MB VCD | **28s** (仅第一次) |
+
+---
+
+## 🔧 故障排查
+
+### 问题 1: UnicodeEncodeError (Windows)
+
+**现象：**
+```
+UnicodeEncodeError: 'gbk' codec can't encode character
+```
+
+**解决：** 工具已自动适配，确保 Python 3.10+
+
+---
+
+### 问题 2: 信号未找到
+
+**现象：**
+```
+❌ 未找到信号 'transfer_done'
+```
+
+**解决：**
+```python
+# 检查信号名是否正确
+with VCDSmartStream('waveform.vcd') as q:
+    q.parse_header_fast()
+    print("可用信号:", list(q.signals.keys())[:10])
+```
+
+---
+
+### 问题 3: 查询太慢
+
+**现象：** 查询耗时超过 1 秒
+
+**解决：**
+```python
+# 使用更小的时间窗口
+changes = q.query_window('signal', 0, 100000)  # 而不是 0, None
+```
+
+---
+
+## 📚 API 参考
+
+### VCDSmartStream 类
+
+```python
+class VCDSmartStream:
+    def parse_header_fast() -> bool
+    def query_window(signal, start_time, end_time, max_changes) -> List[Tuple]
+    def analyze_behavior(signal, start_time, end_time) -> Dict
+```
+
+### 分析函数
+
+```python
+def analyze_pulse(vcd_file, signal, window) -> Dict
+def analyze_clock(vcd_file, signal, window) -> Dict
+def analyze_bus(vcd_file, signals, window) -> Dict
+def analyze_fsm(vcd_file, state_signals, window) -> Dict
+```
+
+---
+
+## 🎯 最佳实践
+
+1. **优先使用时间窗口查询** - 最快（0.2-2ms）
+2. **用户未指定时间时先定位** - 全时间扫描（28s，仅一次）
+3. **迭代追踪时逐步缩小窗口** - 每次提前 100ns
+4. **复杂分析用专用函数** - analyze_clock/analyze_bus
+5. **自动调试用 InteractiveDebugger** - 自动追踪依赖
+
+---
+
+## 🌟 示例项目
+
+查看完整示例：
+- `test/` - 测试用例
+- `tools/vcd_smart.py --test` - 运行测试
+
+---
+
+**🍃 木叶村出品，必属精品！**
+
+**有问题？提交 Issue: https://github.com/lansongfu/rtl-debugger/issues**
