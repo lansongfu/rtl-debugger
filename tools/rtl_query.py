@@ -224,48 +224,180 @@ class RTLDependencyAnalyzer:
         return ports
     
     def _parse_dependencies(self, body: str) -> Dict[str, List[str]]:
-        """解析信号依赖关系"""
+        """解析信号依赖关系（增强版：支持 always 块时序逻辑）"""
         deps = defaultdict(list)
         
-        # 1. 解析 assign 语句
-        # assign lhs = rhs;
+        # 1. 解析 assign 语句（组合逻辑）
         assign_pattern = r'assign\s+([^;]+)\s*=\s*([^;]+);'
         for match in re.finditer(assign_pattern, body):
             lhs = match.group(1).strip()
             rhs = match.group(2).strip()
             
-            # 提取 LHS 信号名 (处理位选)
             lhs_signal = re.match(r'(\w+)', lhs)
             if lhs_signal:
                 lhs_name = lhs_signal.group(1)
-                # 提取 RHS 所有信号
                 rhs_signals = self._extract_signals(rhs)
                 deps[lhs_name] = list(set(rhs_signals))
         
-        # 2. 解析 always 块中的 <= 赋值
-        always_pattern = r'always\s*(?:@\s*\([^)]*\)|#\d+)?\s*(?:begin(.*?)end|([^;]+);)'
-        for match in re.finditer(always_pattern, body, re.DOTALL):
-            block = match.group(1) if match.group(1) else match.group(2)
-            if block:
+        # 2. 解析 always 块（时序逻辑 + 组合逻辑）
+        # 增强：提取时钟、复位、使能信息
+        always_blocks = self._extract_always_blocks(body)
+        
+        for always_info in always_blocks:
+            sensitivity = always_info['sensitivity']  # 敏感列表
+            block = always_info['block']  # 块内容
+            is_sequential = always_info['is_sequential']  # 是否时序逻辑
+            
+            # 时序逻辑分析
+            if is_sequential:
+                # 解析时钟和复位
+                clk_signal = always_info.get('clk_signal')
+                rst_signal = always_info.get('rst_signal')
+                rst_type = always_info.get('rst_type')  # 'sync' or 'async'
+                
                 # 查找 <= 赋值
                 nba_pattern = r'(\w+)\s*<=\s*([^;]+);'
                 for nba_match in re.finditer(nba_pattern, block):
                     lhs = nba_match.group(1)
                     rhs = nba_match.group(2)
                     rhs_signals = self._extract_signals(rhs)
-                    deps[lhs] = list(set(rhs_signals))
-                
-                # 查找 = 赋值 (组合逻辑)
+                    
+                    # 添加元数据
+                    if lhs not in deps:
+                        deps[lhs] = []
+                    
+                    # 存储为结构化依赖
+                    dep_info = {
+                        'signals': list(set(rhs_signals)),
+                        'type': 'sequential',
+                        'clk': clk_signal,
+                        'rst': rst_signal,
+                        'rst_type': rst_type
+                    }
+                    
+                    # 检查是否有使能条件
+                    enable_signals = self._extract_enable_conditions(block, lhs)
+                    if enable_signals:
+                        dep_info['enable'] = enable_signals
+                    
+                    deps[lhs].append(dep_info)
+            
+            # 组合逻辑 always
+            else:
+                # 查找 = 赋值
                 ba_pattern = r'(\w+)\s*=\s*([^;]+);'
                 for ba_match in re.finditer(ba_pattern, block):
                     lhs = ba_match.group(1)
                     rhs = ba_match.group(2)
-                    # 跳过已经匹配的 assign
                     if lhs not in deps:
                         rhs_signals = self._extract_signals(rhs)
                         deps[lhs] = list(set(rhs_signals))
         
-        return dict(deps)
+        # 3. 扁平化依赖（保持向后兼容）
+        flat_deps = {}
+        for lhs, dep_list in deps.items():
+            if isinstance(dep_list[0], dict) if dep_list else False:
+                # 有时序信息，合并所有信号
+                all_signals = []
+                for dep in dep_list:
+                    all_signals.extend(dep.get('signals', []))
+                    if 'enable' in dep:
+                        all_signals.extend(dep['enable'])
+                flat_deps[lhs] = list(set(all_signals))
+            else:
+                flat_deps[lhs] = dep_list
+        
+        return flat_deps
+    
+    def _extract_always_blocks(self, body: str) -> List[Dict]:
+        """
+        提取 always 块信息（增强版）
+        返回：[{
+            'sensitivity': str,          # 敏感列表
+            'block': str,                 # 块内容
+            'is_sequential': bool,        # 是否时序逻辑
+            'clk_signal': Optional[str],  # 时钟信号
+            'rst_signal': Optional[str],  # 复位信号
+            'rst_type': Optional[str]     # 'sync' or 'async'
+        }]
+        """
+        always_blocks = []
+        
+        # 匹配 always 块
+        # always @(posedge clk or posedge rst) begin ... end
+        # always @(*) begin ... end
+        # always #10 begin ... end
+        always_pattern = r'always\s+(?:@\s*\(([^)]*)\)|#\d+)\s*(?:begin(.*?)end|([^;]+);)'
+        
+        for match in re.finditer(always_pattern, body, re.DOTALL):
+            sensitivity = match.group(1) or ''
+            block = match.group(2) if match.group(2) else match.group(3) or ''
+            
+            # 判断是否时序逻辑
+            is_sequential = False
+            clk_signal = None
+            rst_signal = None
+            rst_type = 'async'  # 默认异步复位
+            
+            # 检查敏感列表
+            if 'posedge' in sensitivity or 'negedge' in sensitivity:
+                is_sequential = True
+                
+                # 提取时钟信号（第一个 posedge/negedge）
+                clk_match = re.search(r'(posedge|negedge)\s+(\w+)', sensitivity)
+                if clk_match:
+                    clk_signal = clk_match.group(2)
+                
+                # 检查是否有复位
+                rst_match = re.search(r'(?:posedge|negedge)\s+(\w+)', sensitivity)
+                if rst_match and rst_match.group(1) != clk_signal:
+                    rst_signal = rst_match.group(1)
+                    
+                    # 判断同步/异步复位
+                    if 'posedge' in sensitivity and 'negedge' in sensitivity:
+                        # 混合边沿触发，通常是异步复位
+                        rst_type = 'async'
+                    else:
+                        # 检查块内是否有 if (!rst) 或 if (rst)
+                        if re.search(rf'if\s*\(\s*!?{rst_signal}\s*\)', block):
+                            rst_type = 'async'
+                        else:
+                            rst_type = 'sync'
+            
+            # 组合逻辑 always (@(*) 或 @*)
+            elif sensitivity.strip() in ['*', 'posedge', 'negedge']:
+                is_sequential = False
+            
+            always_blocks.append({
+                'sensitivity': sensitivity,
+                'block': block,
+                'is_sequential': is_sequential,
+                'clk_signal': clk_signal,
+                'rst_signal': rst_signal,
+                'rst_type': rst_type
+            })
+        
+        return always_blocks
+    
+    def _extract_enable_conditions(self, block: str, target_signal: str) -> List[str]:
+        """
+        提取目标信号的使能条件
+        分析：if (enable) target <= value;
+        """
+        enable_signals = []
+        
+        # 查找包含目标信号的赋值语句
+        # if (...) target <= ...
+        # if (...) begin ... target <= ... end
+        pattern = rf'if\s*\(([^)]+)\)\s*(?:begin\s*)?.*?{re.escape(target_signal)}\s*<='
+        
+        for match in re.finditer(pattern, block, re.DOTALL):
+            condition = match.group(1)
+            # 从条件中提取信号
+            signals = self._extract_signals(condition)
+            enable_signals.extend(signals)
+        
+        return list(set(enable_signals))
     
     def _extract_signals(self, expression: str) -> List[str]:
         """从表达式中提取信号名"""
@@ -432,7 +564,7 @@ class RTLDependencyAnalyzer:
         return chain
     
     def print_trace(self, signal_name: str, module_name: Optional[str] = None) -> None:
-        """打印信号追踪结果"""
+        """打印信号追踪结果（增强版：显示时序信息）"""
         results = self.query_signal(signal_name, module_name)
         
         if not results:
