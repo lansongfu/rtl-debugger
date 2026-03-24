@@ -242,7 +242,63 @@ print(f"死状态：{result['dead_states']}")
 
 ---
 
-### 功能 7: 交互式调试（自动追踪根因）
+### 功能 7: AXI4 协议分析
+
+**使用场景：** 分析 AXI4 总线事务、检测协议违规
+
+```python
+from tools.vcd_protocol import analyze_axi4
+
+result = analyze_axi4('waveform.vcd', 
+                      signals={
+                          'awvalid': 'axi_awvalid',
+                          'awready': 'axi_awready',
+                          'wvalid': 'axi_wvalid',
+                          'wready': 'axi_wready',
+                          'bvalid': 'axi_bvalid',
+                          'bready': 'axi_bready'
+                      })
+
+print(f"写事务数：{result['write_transactions']}")
+print(f"读事务数：{result['read_transactions']}")
+print(f"平均写延迟：{result['avg_write_latency_ps']/1000:.2f} ns")
+print(f"违规数：{len(result['violations'])}")
+
+if result['violations']:
+    print("⚠️  检测到协议违规:")
+    for v in result['violations'][:3]:
+        print(f"   {v['channel']}: {v['description']}")
+```
+
+---
+
+### 功能 8: APB 协议分析
+
+**使用场景：** 分析 APB 总线事务、检测错误
+
+```python
+from tools.vcd_protocol import analyze_apb
+
+result = analyze_apb('waveform.vcd', 
+                     signals={
+                         'psel': 'apb_psel',
+                         'penable': 'apb_penable',
+                         'paddr': 'apb_paddr[7:0]',
+                         'pwdata': 'apb_pwdata[31:0]',
+                         'pwrite': 'apb_pwrite',
+                         'pready': 'apb_pready'
+                     })
+
+print(f"事务数：{result['transaction_count']}")
+print(f"读事务：{result['read_count']}")
+print(f"写事务：{result['write_count']}")
+print(f"错误数：{result['error_count']}")
+print(f"平均延迟：{result['avg_latency_ps']/1000:.2f} ns")
+```
+
+---
+
+### 功能 9: 交互式调试（自动追踪根因）
 
 **使用场景：** 给定异常信号，自动追踪依赖找到根因
 
