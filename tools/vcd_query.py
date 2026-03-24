@@ -8,6 +8,12 @@ import sys
 import os
 import re
 
+# Windows 编码适配：确保 UTF-8 输出
+if sys.platform == 'win32':
+    import io
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+
 # 添加 vcdvcd 到路径
 venv_lib = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 
                         'venv/lib/python3.12/site-packages')
