@@ -26,11 +26,11 @@
 ```bash
 # 1. 克隆项目（3 种方式，任选其一）
 
-# 方式 1: HTTPS（推荐）
-git clone https://github.com/lansongfu/rtl-debugger.git
+# 方式 1: HTTPS（推荐，不要加 .git 后缀）
+git clone https://github.com/lansongfu/rtl-debugger
 
 # 方式 2: SSH（需要配置 SSH key）
-git clone git@github.com:lansongfu/rtl-debugger.git
+git clone git@github.com:lansongfu/rtl-debugger
 
 # 方式 3: GitHub CLI
 gh repo clone lansongfu/rtl-debugger
@@ -45,8 +45,8 @@ cd rtl-debugger
 # 解决方案 1: 检查网络连接
 ping github.com
 
-# 解决方案 2: 使用 SSH 方式
-git clone git@github.com:lansongfu/rtl-debugger.git
+# 解决方案 2: 使用 SSH 方式（不要加 .git 后缀）
+git clone git@github.com:lansongfu/rtl-debugger
 
 # 解决方案 3: 配置 Git 代理
 git config --global http.proxy http://proxy.example.com:8080
