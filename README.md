@@ -24,9 +24,45 @@
 **支持：Linux / macOS / Windows**
 
 ```bash
-# 1. 克隆项目
+# 1. 克隆项目（3 种方式，任选其一）
+
+# 方式 1: HTTPS（推荐）
 git clone https://github.com/lansongfu/rtl-debugger.git
+
+# 方式 2: SSH（需要配置 SSH key）
+git clone git@github.com:lansongfu/rtl-debugger.git
+
+# 方式 3: GitHub CLI
+gh repo clone lansongfu/rtl-debugger
+
 cd rtl-debugger
+
+### 🔧 常见问题
+
+**问题 1: `cannot connect to server`**
+
+```bash
+# 解决方案 1: 检查网络连接
+ping github.com
+
+# 解决方案 2: 使用 SSH 方式
+git clone git@github.com:lansongfu/rtl-debugger.git
+
+# 解决方案 3: 配置 Git 代理
+git config --global http.proxy http://proxy.example.com:8080
+git config --global https.proxy https://proxy.example.com:8080
+
+# 解决方案 4: 使用 GitHub CLI
+gh repo clone lansongfu/rtl-debugger
+```
+
+**问题 2: `Permission denied (publickey)`**
+
+```bash
+# 需要配置 SSH key
+ssh-keygen -t ed25519 -C "your_email@example.com"
+# 然后将 ~/.ssh/id_ed25519.pub 添加到 GitHub SSH keys
+```
 
 # 2. 创建虚拟环境
 python -m venv venv
