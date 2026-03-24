@@ -1,3 +1,10 @@
+---
+name: rtl-debugger
+description: RTL 波形分析调试工具 - 智能流式查询、深度信号分析、AXI4/APB 协议解析
+homepage: https://github.com/lansongfu/rtl-debugger
+metadata: {"clawdbot":{"emoji":"🔬"}}
+---
+
 # RTL Debugger Skill
 
 > 🎯 **让 AI Agent 都能使用的 RTL 调试工具**  
