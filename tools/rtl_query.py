@@ -26,6 +26,7 @@ class RTLDependencyAnalyzer:
         self.instance_map = {}  # module_name -> [(instance_name, module_type, connections)]
         self.defines = {}  # `define 存储
         self.include_dirs = []  # `include 搜索路径
+        self.hierarchy = {}  # 层级结构: top_module -> {instances: [...], parent: None}
     
     def parse_file(self, filepath: str) -> None:
         """解析单个 Verilog 文件"""
@@ -806,10 +807,15 @@ class RTLDependencyAnalyzer:
         # 目前返回空列表，后续需要修改 _parse_modules 来存储原始依赖
         return mod_info.get('raw_dependencies', {}).get(signal_name, [])
     
-    def trace_signal(self, signal_name: str, max_depth: int = 5) -> List[Dict]:
+    def trace_signal(self, signal_name: str, max_depth: int = 5, full: bool = False) -> List[Dict]:
         """
         递归追踪信号依赖链
         回答：这个信号为什么变化？它的上游是什么？
+        
+        参数:
+            signal_name: 信号名称
+            max_depth: 最大追踪深度
+            full: True - 追踪完整依赖树到源头; False - 只查上一级依赖（单步）
         """
         chain = []
         visited = set()
@@ -864,9 +870,10 @@ class RTLDependencyAnalyzer:
                     'direction': result['direction']
                 })
                 
-                # 递归追踪依赖
-                for dep in deps:
-                    trace(dep, mod, depth + 1, parent=f"{mod}.{sig}")
+                # 只有 full 模式才递归追踪依赖
+                if full:
+                    for dep in deps:
+                        trace(dep, mod, depth + 1, parent=f"{mod}.{sig}")
         
         # 从所有模块开始追踪
         for mod_name in self.modules.keys():
@@ -874,7 +881,357 @@ class RTLDependencyAnalyzer:
         
         return chain
     
-    def print_trace(self, signal_name: str, module_name: Optional[str] = None) -> None:
+    def trace_cross_module(self, signal_name: str, module_name: str, max_depth: int = 10) -> Dict:
+        """
+        跨模块追踪信号（核心功能）
+        自动追踪实例化端口连接，支持层级追踪（top → sub1 → sub2）
+        一路追到顶层接口或模块边界
+        
+        参数:
+            signal_name: 起始信号名
+            module_name: 起始模块名
+            max_depth: 最大追踪深度
+            
+        返回:
+            {
+                'path': [
+                    {'module': 'xxx', 'signal': 'xxx', 'port': 'xxx', 'instance': 'xxx', 'direction': 'up/down'},
+                    ...
+                ],
+                'boundary': 'top_port' | 'module_boundary' | 'max_depth',
+                'summary': '追踪结果摘要'
+            }
+        """
+        result = {
+            'path': [],
+            'boundary': None,
+            'summary': ''
+        }
+        
+        visited = set()
+        
+        def find_port_connection(sig: str, mod: str) -> Optional[Dict]:
+            """查找信号连接到哪个实例的哪个端口"""
+            mod_info = self.modules.get(mod)
+            if not mod_info:
+                return None
+            
+            # 检查是否是当前模块的端口
+            if sig in mod_info['ports']:
+                return {
+                    'type': 'port',
+                    'direction': mod_info['ports'][sig]['direction'],
+                    'module': mod,
+                    'signal': sig
+                }
+            
+            # 检查是否连接到某个实例
+            for inst in mod_info['instances']:
+                for port, connected_sig in inst['connections'].items():
+                    # 处理拼接和位选情况
+                    if sig in str(connected_sig):
+                        return {
+                            'type': 'instance_port',
+                            'instance': inst['name'],
+                            'instance_type': inst['type'],
+                            'port': port,
+                            'connected_signal': connected_sig,
+                            'parent_module': mod
+                        }
+            
+            return None
+        
+        def trace_up(sig: str, mod: str, depth: int, path_key: str) -> bool:
+            """向上追踪（从子模块到父模块）"""
+            if depth > max_depth:
+                result['boundary'] = 'max_depth'
+                return False
+            
+            # 查找父模块
+            for parent_mod, parent_info in self.modules.items():
+                for inst in parent_info['instances']:
+                    if inst['type'] == mod:
+                        # 找到父模块，检查端口连接
+                        for port, connected_sig in inst['connections'].items():
+                            # 检查当前信号是否是这个端口的输出
+                            mod_info = self.modules.get(mod)
+                            if mod_info and sig in mod_info['ports']:
+                                port_dir = mod_info['ports'][sig]['direction']
+                                if port_dir == 'output':
+                                    # 追踪到父模块
+                                    result['path'].append({
+                                        'from_module': mod,
+                                        'from_signal': sig,
+                                        'from_port': sig,
+                                        'to_module': parent_mod,
+                                        'to_signal': connected_sig,
+                                        'via_instance': inst['name'],
+                                        'via_port': port,
+                                        'direction': 'up',
+                                        'depth': depth
+                                    })
+                                    
+                                    new_key = f"{parent_mod}.{connected_sig}"
+                                    if new_key in visited:
+                                        return True
+                                    visited.add(new_key)
+                                    
+                                    # 继续向上追踪
+                                    return trace_up(connected_sig, parent_mod, depth + 1, new_key)
+            
+            # 没有找到父模块，到达顶层
+            mod_info = self.modules.get(mod)
+            if mod_info and sig in mod_info['ports']:
+                result['boundary'] = 'top_port'
+                result['path'].append({
+                    'module': mod,
+                    'signal': sig,
+                    'type': 'top_port',
+                    'direction': mod_info['ports'][sig]['direction'],
+                    'depth': depth
+                })
+            else:
+                result['boundary'] = 'module_boundary'
+            
+            return True
+        
+        def trace_down(sig: str, mod: str, depth: int, path_key: str) -> bool:
+            """向下追踪（从父模块到子模块）"""
+            if depth > max_depth:
+                result['boundary'] = 'max_depth'
+                return False
+            
+            mod_info = self.modules.get(mod)
+            if not mod_info:
+                return False
+            
+            # 检查实例化连接
+            for inst in mod_info['instances']:
+                for port, connected_sig in inst['connections'].items():
+                    if sig == connected_sig or sig in str(connected_sig):
+                        # 找到连接，追踪到子模块
+                        sub_mod = inst['type']
+                        sub_mod_info = self.modules.get(sub_mod)
+                        
+                        if sub_mod_info and port in sub_mod_info['ports']:
+                            port_dir = sub_mod_info['ports'][port]['direction']
+                            
+                            result['path'].append({
+                                'from_module': mod,
+                                'from_signal': sig,
+                                'to_module': sub_mod,
+                                'to_signal': port,
+                                'to_port': port,
+                                'via_instance': inst['name'],
+                                'via_port': port,
+                                'direction': 'down',
+                                'depth': depth
+                            })
+                            
+                            new_key = f"{sub_mod}.{port}"
+                            if new_key in visited:
+                                return True
+                            visited.add(new_key)
+                            
+                            # 继续向下追踪
+                            return trace_down(port, sub_mod, depth + 1, new_key)
+            
+            # 没有找到子模块连接，到达边界
+            result['boundary'] = 'module_boundary'
+            return True
+        
+        # 开始追踪
+        start_key = f"{module_name}.{signal_name}"
+        visited.add(start_key)
+        
+        # 获取信号信息
+        mod_info = self.modules.get(module_name)
+        if not mod_info:
+            result['summary'] = f"模块 '{module_name}' 不存在"
+            return result
+        
+        signal_info = find_port_connection(signal_name, module_name)
+        
+        if signal_info is None:
+            # 内部信号，查找其驱动
+            if signal_name in mod_info['dependencies']:
+                result['path'].append({
+                    'module': module_name,
+                    'signal': signal_name,
+                    'type': 'internal',
+                    'dependencies': mod_info['dependencies'][signal_name],
+                    'depth': 0
+                })
+                result['summary'] = f"内部信号，依赖: {mod_info['dependencies'][signal_name]}"
+            else:
+                result['summary'] = f"信号 '{signal_name}' 在模块 '{module_name}' 中未找到"
+            return result
+        
+        if signal_info['type'] == 'port':
+            direction = signal_info['direction']
+            
+            if direction == 'input':
+                # 输入端口，向上追踪
+                trace_up(signal_name, module_name, 0, start_key)
+            elif direction == 'output':
+                # 输出端口，检查是否来自子模块或内部逻辑
+                if signal_name in mod_info['dependencies']:
+                    # 来自内部逻辑
+                    result['path'].append({
+                        'module': module_name,
+                        'signal': signal_name,
+                        'type': 'output_from_logic',
+                        'dependencies': mod_info['dependencies'][signal_name],
+                        'depth': 0
+                    })
+                # 继续向下追踪
+                trace_down(signal_name, module_name, 0, start_key)
+            else:
+                # inout
+                trace_up(signal_name, module_name, 0, start_key)
+                trace_down(signal_name, module_name, 0, start_key)
+        
+        # 生成摘要
+        if result['path']:
+            top_info = result['path'][0]
+            if result['boundary'] == 'top_port':
+                result['summary'] = f"追踪到顶层端口: {top_info.get('module')}.{top_info.get('signal')}"
+            elif result['boundary'] == 'max_depth':
+                result['summary'] = f"达到最大追踪深度 ({max_depth})"
+            else:
+                result['summary'] = f"追踪了 {len(result['path'])} 层连接"
+        else:
+            result['summary'] = "未找到跨模块连接"
+        
+        return result
+    
+    def search_global(self, signal_pattern: str, use_regex: bool = False) -> List[Dict]:
+        """
+        全局搜索信号
+        搜索所有模块中匹配的信号，返回完整路径
+        
+        参数:
+            signal_pattern: 信号名模式（支持通配符 * 和 ?，或正则表达式）
+            use_regex: 是否使用正则表达式模式
+            
+        返回:
+            [
+                {
+                    'path': 'module.signal',
+                    'module': 'xxx',
+                    'signal': 'xxx',
+                    'type': 'port' | 'internal',
+                    'direction': 'input' | 'output' | 'inout' | 'internal',
+                    'line': 行号（如果有）
+                },
+                ...
+            ]
+        """
+        results = []
+        
+        # 构建匹配模式
+        if use_regex:
+            pattern = re.compile(signal_pattern)
+        else:
+            # 转换通配符到正则
+            regex_pattern = signal_pattern.replace('.', r'\.')
+            regex_pattern = regex_pattern.replace('*', '.*')
+            regex_pattern = regex_pattern.replace('?', '.')
+            regex_pattern = f"^{regex_pattern}$"
+            pattern = re.compile(regex_pattern, re.IGNORECASE)
+        
+        # 搜索所有模块
+        for mod_name, mod_info in self.modules.items():
+            # 搜索端口
+            for port_name, port_info in mod_info['ports'].items():
+                if pattern.match(port_name):
+                    results.append({
+                        'path': f"{mod_name}.{port_name}",
+                        'module': mod_name,
+                        'signal': port_name,
+                        'type': 'port',
+                        'direction': port_info['direction'],
+                        'dependencies': mod_info['dependencies'].get(port_name, [])
+                    })
+            
+            # 搜索内部信号（依赖中的左侧信号）
+            for signal_name in mod_info['dependencies'].keys():
+                if signal_name not in mod_info['ports']:  # 避免重复
+                    if pattern.match(signal_name):
+                        results.append({
+                            'path': f"{mod_name}.{signal_name}",
+                            'module': mod_name,
+                            'signal': signal_name,
+                            'type': 'internal',
+                            'direction': 'internal',
+                            'dependencies': mod_info['dependencies'][signal_name]
+                        })
+        
+        return results
+    
+    def build_hierarchy(self, top_module: Optional[str] = None) -> Dict:
+        """
+        构建模块层级结构
+        
+        参数:
+            top_module: 指定顶层模块（可选，不指定则自动检测）
+            
+        返回:
+            {
+                'top': 'top_module_name',
+                'hierarchy': {
+                    'module_name': {
+                        'instances': [{'name': 'xxx', 'type': 'xxx'}, ...],
+                        'parent': 'parent_module_name',
+                        'children': ['child_module_1', ...]
+                    },
+                    ...
+                }
+            }
+        """
+        hierarchy = {}
+        
+        # 第一遍：收集所有实例关系
+        for mod_name, mod_info in self.modules.items():
+            hierarchy[mod_name] = {
+                'instances': [],
+                'parent': None,
+                'children': []
+            }
+            
+            for inst in mod_info['instances']:
+                hierarchy[mod_name]['instances'].append({
+                    'name': inst['name'],
+                    'type': inst['type']
+                })
+                
+                # 记录子模块
+                sub_mod = inst['type']
+                if sub_mod in self.modules:
+                    if sub_mod not in hierarchy:
+                        hierarchy[sub_mod] = {
+                            'instances': [],
+                            'parent': None,
+                            'children': []
+                        }
+                    hierarchy[sub_mod]['parent'] = mod_name
+                    if sub_mod not in hierarchy[mod_name]['children']:
+                        hierarchy[mod_name]['children'].append(sub_mod)
+        
+        # 检测顶层模块
+        if top_module:
+            detected_top = top_module
+        else:
+            # 没有父模块的就是顶层
+            top_candidates = [m for m, h in hierarchy.items() if h['parent'] is None]
+            detected_top = top_candidates[0] if len(top_candidates) == 1 else None
+        
+        return {
+            'top': detected_top,
+            'hierarchy': hierarchy
+        }
+    
+    def print_trace(self, signal_name: str, module_name: Optional[str] = None, full: bool = False) -> None:
         """打印信号追踪结果（增强版：区分数据信号和控制信号）"""
         results = self.query_signal(signal_name, module_name)
         
@@ -947,7 +1304,7 @@ class RTLDependencyAnalyzer:
         
         # 递归追踪
         print(f"\n🔗 完整依赖链:")
-        chain = self.trace_signal(signal_name)
+        chain = self.trace_signal(signal_name, full=full)
         
         if not chain:
             print("   (无更多依赖)")
@@ -981,6 +1338,65 @@ class RTLDependencyAnalyzer:
                 print(f"   实例化：{len(mod_info['instances'])} 个")
                 for inst in mod_info['instances'][:3]:
                     print(f"      {inst['type']} {inst['name']}")
+    
+    def print_cross_module_trace(self, signal_name: str, module_name: str, max_depth: int = 10) -> None:
+        """打印跨模块追踪结果"""
+        result = self.trace_cross_module(signal_name, module_name, max_depth)
+        
+        print(f"\n🔍 跨模块追踪：{signal_name} (模块: {module_name})")
+        print("=" * 80)
+        
+        if result['path']:
+            for i, step in enumerate(result['path']):
+                if step.get('type') == 'top_port':
+                    print(f"\n  [{i}] 🏠 顶层端口")
+                    print(f"      模块: {step['module']}")
+                    print(f"      信号: {step['signal']}")
+                    print(f"      方向: {step['direction']}")
+                elif step.get('type') == 'internal':
+                    print(f"\n  [{i}] 🔧 内部信号")
+                    print(f"      模块: {step['module']}")
+                    print(f"      信号: {step['signal']}")
+                    print(f"      依赖: {step.get('dependencies', [])}")
+                elif step.get('type') == 'output_from_logic':
+                    print(f"\n  [{i}] 📤 输出端口（来自逻辑）")
+                    print(f"      模块: {step['module']}")
+                    print(f"      信号: {step['signal']}")
+                    print(f"      依赖: {step.get('dependencies', [])}")
+                elif 'direction' in step:
+                    direction_emoji = '⬆️' if step['direction'] == 'up' else '⬇️'
+                    print(f"\n  [{i}] {direction_emoji} {'向上追踪' if step['direction'] == 'up' else '向下追踪'}")
+                    print(f"      从: {step.get('from_module', '')}.{step.get('from_signal', '')}")
+                    print(f"      到: {step.get('to_module', '')}.{step.get('to_signal', '')}")
+                    print(f"      实例: {step.get('via_instance', '')} (端口: {step.get('via_port', '')})")
+        else:
+            print(f"  未找到跨模块连接")
+        
+        print(f"\n📍 边界: {result['boundary'] or '未知'}")
+        print(f"📝 摘要: {result['summary']}")
+    
+    def print_global_search(self, signal_pattern: str, use_regex: bool = False) -> None:
+        """打印全局搜索结果"""
+        results = self.search_global(signal_pattern, use_regex)
+        
+        print(f"\n🔍 全局搜索：{signal_pattern}")
+        if use_regex:
+            print("   模式: 正则表达式")
+        print("=" * 80)
+        
+        if results:
+            print(f"找到 {len(results)} 个匹配:\n")
+            for r in results:
+                type_emoji = '🔌' if r['type'] == 'port' else '📡'
+                dir_str = f"({r['direction']})" if r['direction'] != 'internal' else ""
+                print(f"  {type_emoji} {r['path']} {dir_str}")
+                if r.get('dependencies'):
+                    deps_str = ", ".join(r['dependencies'][:5])
+                    if len(r['dependencies']) > 5:
+                        deps_str += f"... (+{len(r['dependencies'])-5})"
+                    print(f"      ← {deps_str}")
+        else:
+            print("未找到匹配的信号")
 
 
 def parse_filelist(filelist_path: str, base_dir: Optional[str] = None, visited: Optional[Set[str]] = None, depth: int = 0) -> RTLDependencyAnalyzer:
@@ -1102,38 +1518,135 @@ def _expand_env_vars(text: str) -> str:
 
 
 if __name__ == '__main__':
-    import sys
+    import argparse
     
-    if len(sys.argv) < 2:
-        print("用法:")
-        print("  ./rtl_query.py <file1.v> [file2.v ...] [--signal <name>] [--trace <name>]")
-        print("  ./rtl_query.py --filelist <filelist.txt> [--signal <name>]")
-        sys.exit(1)
+    parser = argparse.ArgumentParser(
+        description='RTL 信号依赖分析器 - 分析信号跳转变化条件',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog='''
+示例:
+  # 解析文件并查看摘要
+  %(prog)s design.v
+
+  # 解析 filelist
+  %(prog)s --filelist design.f
+
+  # 查询信号依赖（单步）
+  %(prog)s design.v --signal data_valid
+
+  # 查询完整依赖链
+  %(prog)s design.v --signal data_valid --full
+
+  # 跨模块追踪
+  %(prog)s design.v --cross data_valid --module sub_module
+
+  # 全局搜索信号（通配符）
+  %(prog)s design.v --global "*valid*"
+
+  # 全局搜索信号（正则表达式）
+  %(prog)s design.v --global "valid.*" --regex
+        '''
+    )
+    
+    parser.add_argument('files', nargs='*', help='Verilog 源文件')
+    parser.add_argument('--filelist', '-f', help='filelist 文件路径')
+    parser.add_argument('--signal', '-s', help='查询信号依赖')
+    parser.add_argument('--trace', '-t', help='追踪信号（同 --signal）')
+    parser.add_argument('--module', '-m', help='指定模块名（用于 --cross）')
+    parser.add_argument('--cross', '-c', help='跨模块追踪信号')
+    parser.add_argument('--global', '-g', dest='global_search', help='全局搜索信号（支持通配符 * 和 ?）')
+    parser.add_argument('--regex', '-r', action='store_true', help='使用正则表达式进行全局搜索')
+    parser.add_argument('--full', action='store_true', help='追踪完整依赖树到源头（默认只查上一级）')
+    parser.add_argument('--depth', '-d', type=int, default=10, help='最大追踪深度（默认 10）')
+    
+    args = parser.parse_args()
     
     analyzer = RTLDependencyAnalyzer()
     
     # 解析文件
-    if '--filelist' in sys.argv:
-        idx = sys.argv.index('--filelist')
-        if idx + 1 < len(sys.argv):
-            analyzer = parse_filelist(sys.argv[idx + 1])
-    else:
-        files = [f for f in sys.argv[1:] if not f.startswith('--')]
-        for f in files:
+    if args.filelist:
+        analyzer = parse_filelist(args.filelist)
+    elif args.files:
+        for f in args.files:
             if os.path.exists(f):
                 print(f"📄 解析：{f}")
                 analyzer.parse_file(f)
+    else:
+        parser.print_help()
+        sys.exit(1)
     
-    # 查询信号
-    if '--signal' in sys.argv:
-        idx = sys.argv.index('--signal')
-        if idx + 1 < len(sys.argv):
-            signal = sys.argv[idx + 1]
-            analyzer.print_trace(signal)
-    elif '--trace' in sys.argv:
-        idx = sys.argv.index('--trace')
-        if idx + 1 < len(sys.argv):
-            signal = sys.argv[idx + 1]
-            analyzer.print_trace(signal)
+    # 执行查询
+    if args.signal:
+        analyzer.print_trace(args.signal, full=args.full)
+    elif args.trace:
+        analyzer.print_trace(args.trace, full=args.full)
+    elif args.cross:
+        # 跨模块追踪
+        module_name = args.module
+        if not module_name:
+            # 尝试自动检测模块
+            modules = list(analyzer.modules.keys())
+            if len(modules) == 1:
+                module_name = modules[0]
+            else:
+                print(f"❌ 请使用 --module 指定模块名。可用模块: {', '.join(modules)}")
+                sys.exit(1)
+        
+        result = analyzer.trace_cross_module(args.cross, module_name, args.depth)
+        
+        print(f"\n🔍 跨模块追踪：{args.cross} (模块: {module_name})")
+        print("=" * 80)
+        
+        if result['path']:
+            for i, step in enumerate(result['path']):
+                if step.get('type') == 'top_port':
+                    print(f"\n  [{i}] 🏠 顶层端口")
+                    print(f"      模块: {step['module']}")
+                    print(f"      信号: {step['signal']}")
+                    print(f"      方向: {step['direction']}")
+                elif step.get('type') == 'internal':
+                    print(f"\n  [{i}] 🔧 内部信号")
+                    print(f"      模块: {step['module']}")
+                    print(f"      信号: {step['signal']}")
+                    print(f"      依赖: {step.get('dependencies', [])}")
+                elif step.get('type') == 'output_from_logic':
+                    print(f"\n  [{i}] 📤 输出端口（来自逻辑）")
+                    print(f"      模块: {step['module']}")
+                    print(f"      信号: {step['signal']}")
+                    print(f"      依赖: {step.get('dependencies', [])}")
+                elif 'direction' in step:
+                    direction_emoji = '⬆️' if step['direction'] == 'up' else '⬇️'
+                    print(f"\n  [{i}] {direction_emoji} {'向上追踪' if step['direction'] == 'up' else '向下追踪'}")
+                    print(f"      从: {step.get('from_module', '')}.{step.get('from_signal', '')}")
+                    print(f"      到: {step.get('to_module', '')}.{step.get('to_signal', '')}")
+                    print(f"      实例: {step.get('via_instance', '')} (端口: {step.get('via_port', '')})")
+        else:
+            print(f"  未找到跨模块连接")
+        
+        print(f"\n📍 边界: {result['boundary'] or '未知'}")
+        print(f"📝 摘要: {result['summary']}")
+        
+    elif args.global_search:
+        # 全局搜索
+        results = analyzer.search_global(args.global_search, use_regex=args.regex)
+        
+        print(f"\n🔍 全局搜索：{args.global_search}")
+        if args.regex:
+            print("   模式: 正则表达式")
+        print("=" * 80)
+        
+        if results:
+            print(f"找到 {len(results)} 个匹配:\n")
+            for r in results:
+                type_emoji = '🔌' if r['type'] == 'port' else '📡'
+                dir_str = f"({r['direction']})" if r['direction'] != 'internal' else ""
+                print(f"  {type_emoji} {r['path']} {dir_str}")
+                if r.get('dependencies'):
+                    deps_str = ", ".join(r['dependencies'][:5])
+                    if len(r['dependencies']) > 5:
+                        deps_str += f"... (+{len(r['dependencies'])-5})"
+                    print(f"      ← {deps_str}")
+        else:
+            print("未找到匹配的信号")
     else:
         analyzer.print_summary()

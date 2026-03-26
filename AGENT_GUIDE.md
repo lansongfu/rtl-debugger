@@ -1,8 +1,45 @@
 # RTL Debugger - Agent 使用指南
 
 > 🎯 **让 AI Agent 都能使用的 RTL 调试工具**  
-> 📚 版本：v1.3.0  
+> 📚 版本：v1.4.0  
 > ⚡ 性能：毫秒级查询，30,000 倍加速
+
+---
+
+## 🔄 标准调试流程（必读！）
+
+**核心原则：默认只查上一级，逐步定位问题**
+
+```
+用户：A 信号异常
+   ↓
+Agent: 调用 VCD 查看 A 信号波形
+   ↓ 发现 t=1000ns 异常
+   ↓
+Agent: 调用 rtl_query --signal A（默认模式，只查上一级）
+   ↓ 返回：A ← B, C, D
+   ↓
+Agent: 调用 VCD 查看 B/C/D 在 t=1000ns 的波形
+   ↓ 发现 D 异常
+   ↓
+Agent: 调用 rtl_query --signal D（默认模式，只查上一级）
+   ↓ 返回：D ← E, F
+   ↓
+Agent: 调用 VCD 查看 E/F...
+   ↓
+逐步定位到根因！
+```
+
+**为什么这样设计？**
+- ✅ **单步定位** - 每次只看直接驱动信号，避免信息过载
+- ✅ **VCD 联动** - Agent 自主决定何时调用 VCD 验证
+- ✅ **高效排查** - 通常 2-3 步就能定位到根因
+
+**完整依赖树（可选）**
+```bash
+# 需要时才用 --full 查看完整链路
+rtl_query.py --filelist design.f --signal data_out --full
+```
 
 ---
 
@@ -67,17 +104,116 @@
 
 # 方式 3: 递归追踪依赖链
 ./venv/bin/python tools/rtl_query.py --filelist src/filelist.f --trace transfer_done
+
+# 方式 4: 全局搜索信号（不知道信号在哪个模块时）
+./venv/bin/python tools/rtl_query.py --filelist chip.f --global "*transfer*"
+
+# 方式 5: 跨模块追踪（追踪到子模块）
+./venv/bin/python tools/rtl_query.py --filelist design.f --cross data_out --module top
+
+# 方式 6: 完整依赖树（查看端到端连接）
+./venv/bin/python tools/rtl_query.py --filelist design.f --signal data_out --full
 ```
 
+### 命令行参数
+
+| 参数 | 短参 | 说明 | 默认值 |
+|------|------|------|--------|
+| `--signal` | `-s` | 查询信号依赖 | - |
+| `--trace` | `-t` | 追踪信号（同 --signal） | - |
+| `--filelist` | `-f` | filelist 文件路径 | - |
+| `--module` | `-m` | 指定模块名 | 所有模块 |
+| `--cross` | `-c` | 跨模块追踪信号 | - |
+| `--global` | `-g` | 全局搜索信号（支持 `*` `?`） | - |
+| `--regex` | `-r` | 使用正则表达式搜索 | 关闭 |
+| `--full` | | 追踪完整依赖树到源头 | 单步模式 |
+| `--depth` | `-d` | 最大追踪深度 | 10 |
+
 ### 输出示例
+
+#### 单步查询（默认）
+
+```bash
+./venv/bin/python tools/rtl_query.py --filelist design.f --signal transfer_done
+```
 
 ```
 🔍 信号查询：transfer_done
 
+📦 模块：dma_ctrl
+   类型：internal
+   驱动：assign/always
+   ⏰ 时钟：clk
+   🔄 异步复位：rst_n
+   🎛️  控制信号:
+      ⚡ rst_n
+      ⚡ enable
+   📋 条件表达式:
+      [if] !rst_n
+      [if] enable
+   📊 数据信号:
+      ← all_b_received
+
+🔗 依赖链（上一级）:
 transfer_done ← all_b_received
-  驱动类型：sequential (时序逻辑)
-  时钟：clk (posedge)
-  复位：rst_n (negedge, async)
+```
+
+#### 全局搜索
+
+```bash
+./venv/bin/python tools/rtl_query.py --filelist chip.f --global "*transfer*"
+```
+
+```
+🔍 全局搜索：*transfer*
+
+找到 3 个匹配:
+1. top.dma_ctrl.transfer_done (internal)
+   ← all_b_received
+2. top.axi_master.transfer_done (output)
+   ← dma_ctrl.transfer_done
+3. top.soc_top.transfer_done (input)
+   ← axi_master.transfer_done
+```
+
+#### 跨模块追踪
+
+```bash
+./venv/bin/python tools/rtl_query.py --filelist design.f --cross data_out --module top
+```
+
+```
+🔗 跨模块追踪：data_out (从 top 开始)
+
+第 0 层：top.data_out
+  ← mid_data (wire)
+
+第 1 层：sub_module.data_out (通过 u_sub 连接)
+  ← data_in (时序逻辑，clk=clk)
+
+第 2 层：sub_module.data_in (port)
+  ← top.data_in (顶层输入)
+
+📊 追踪了 3 层连接，到达顶层接口
+```
+
+#### 完整依赖树
+
+```bash
+./venv/bin/python tools/rtl_query.py --filelist design.f --signal data_out --full
+```
+
+```
+🔗 完整依赖树：data_out
+
+data_out
+  ← mid_data (组合)
+    ← sub_module.data_out (时序，clk=clk)
+      ← sub_module.data_in (组合)
+        ← top.data_in (primary input)
+
+🎯 关键路径：data_in → sub_module → data_out (1 拍延迟)
+```
   使能条件：cmd_valid, cmd_ready
 
 all_b_received ← rx_byte_cnt, CMD_B_BYTES
