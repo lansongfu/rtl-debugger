@@ -131,21 +131,78 @@ class RTLDependencyAnalyzer:
         """移除预处理指令"""
         content = re.sub(r'^\s*`.*$', '', content, flags=re.MULTILINE)
         return content
-    
+
+    def _skip_balanced_parens(self, content: str, start: int) -> int:
+        """
+        跳过平衡的括号，返回括号结束后的位置
+        支持嵌套括号，如 #(parameter N=8) 或 #( .N(8) )
+        """
+        if start >= len(content) or content[start] not in '(#':
+            return start
+
+        # 如果是 # 开头，找到下一个 (
+        if content[start] == '#':
+            pos = start + 1
+            while pos < len(content) and content[pos].isspace():
+                pos += 1
+            if pos >= len(content) or content[pos] != '(':
+                return pos
+            start = pos
+
+        depth = 0
+        pos = start
+        while pos < len(content):
+            ch = content[pos]
+            if ch == '(':
+                depth += 1
+            elif ch == ')':
+                depth -= 1
+                if depth == 0:
+                    return pos + 1
+            pos += 1
+        return pos
+
     def _parse_modules(self, content: str, filepath: str) -> Dict:
         """解析模块定义"""
         modules = {}
-        
+
         # 先处理 generate 块
         content = self._process_generate(content)
-        
+
         # 匹配 module 定义
-        module_pattern = r'module\s+(\w+)\s*(?:#\(.*?\))?\s*\(([^)]*)\)\s*(.*?)(?:endmodule|\Z)'
-        
-        for match in re.finditer(module_pattern, content, re.DOTALL):
-            mod_name = match.group(1)
-            port_section = match.group(2)
-            body = match.group(3)
+        # 使用自定义匹配来正确处理嵌套括号
+        module_starts = list(re.finditer(r'\bmodule\s+(\w+)\s*', content))
+
+        for start_match in module_starts:
+            mod_name = start_match.group(1)
+            pos = start_match.end()
+
+            # 跳过空白
+            while pos < len(content) and content[pos].isspace():
+                pos += 1
+
+            # 检查是否有参数列表 #(parameter N=8)
+            if pos < len(content) and content[pos] == '#':
+                # 跳过参数列表（使用括号匹配）
+                pos = self._skip_balanced_parens(content, pos)
+                # 跳过空白
+                while pos < len(content) and content[pos].isspace():
+                    pos += 1
+
+            # 提取端口列表
+            if pos < len(content) and content[pos] == '(':
+                port_end = self._skip_balanced_parens(content, pos)
+                port_section = content[pos+1:port_end-1]
+                pos = port_end
+            else:
+                port_section = ''
+
+            # 查找 endmodule
+            end_match = re.search(r'\bendmodule\b', content[pos:])
+            if end_match:
+                body = content[pos:pos+end_match.start()]
+            else:
+                body = content[pos:]
             
             # 解析端口
             ports = self._parse_ports(port_section)
@@ -616,35 +673,87 @@ class RTLDependencyAnalyzer:
     def _parse_instances(self, body: str) -> List[Dict]:
         """解析模块实例化"""
         instances = []
-        
+
+        # 需要过滤的关键字（这些不是模块类型）
+        filter_keywords = {
+            'input', 'output', 'inout', 'wire', 'reg', 'assign', 'always',
+            'posedge', 'negedge', 'if', 'else', 'case', 'casex', 'casez',
+            'for', 'while', 'repeat', 'forever', 'begin', 'end', 'fork', 'join',
+            'function', 'task', 'initial', 'generate', 'endgenerate',
+            'module', 'endmodule', 'primitive', 'endprimitive',
+            'specify', 'endspecify', 'parameter', 'localparam', 'genvar'
+        }
+
         # 匹配 module_type inst_name (.port(signal), ...)
-        # 支持多行
-        inst_pattern = r'(\w+)\s+(?:#\s*\([^)]*\)\s*)?(\w+)\s*\(([^)]*)\)'
-        
-        for match in re.finditer(inst_pattern, body, re.DOTALL):
-            mod_type = match.group(1)
-            inst_name = match.group(2)
-            connections_str = match.group(3)
-            
+        # 使用自定义匹配来处理嵌套括号
+        inst_starts = list(re.finditer(r'\b(\w+)\s+(?:#\s*\(.*?\)\s*)?(\w+)\s*\(', body, re.DOTALL))
+
+        for start_match in inst_starts:
+            mod_type = start_match.group(1)
+            inst_name = start_match.group(2)
+
             # 跳过关键字
-            if mod_type in ['input', 'output', 'inout', 'wire', 'reg', 'assign', 'always']:
+            if mod_type.lower() in filter_keywords:
                 continue
-            
-            # 解析端口连接
-            connections = {}
-            conn_pattern = r'\.(\w+)\s*\((\w+)\)'
-            for conn_match in re.finditer(conn_pattern, connections_str):
-                port = conn_match.group(1)
-                signal = conn_match.group(2)
-                connections[port] = signal
-            
+
+            # 提取连接字符串（需要匹配完整的括号）
+            paren_start = start_match.end() - 1  # ( 的位置
+            paren_end = self._skip_balanced_parens(body, paren_start)
+            connections_str = body[paren_start+1:paren_end-1]
+
+            # 解析端口连接（支持位选和拼接）
+            connections = self._parse_port_connections(connections_str)
+
             instances.append({
                 'type': mod_type,
                 'name': inst_name,
                 'connections': connections
             })
-        
+
         return instances
+
+    def _parse_port_connections(self, connections_str: str) -> Dict:
+        """
+        解析端口连接，支持：
+        - 简单连接：.port(signal)
+        - 位选：.port(signal[3:0])
+        - 拼接：.port({a, b})
+        - 常量：.port(4'b0)
+        """
+        connections = {}
+
+        # 找到所有 .port(xxx) 形式的连接
+        pos = 0
+        while pos < len(connections_str):
+            # 查找 .port
+            port_match = re.match(r'\s*\.(\w+)\s*\(', connections_str[pos:])
+            if not port_match:
+                pos += 1
+                continue
+
+            port_name = port_match.group(1)
+            pos += port_match.end()
+
+            # 使用括号匹配找到连接表达式
+            if pos <= len(connections_str) and connections_str[pos-1] == '(':
+                # 找到匹配的右括号
+                depth = 1
+                start = pos
+                while pos < len(connections_str) and depth > 0:
+                    ch = connections_str[pos]
+                    if ch == '(':
+                        depth += 1
+                    elif ch == ')':
+                        depth -= 1
+                    pos += 1
+                signal_expr = connections_str[start:pos-1].strip()
+                connections[port_name] = signal_expr
+
+            # 跳过逗号
+            while pos < len(connections_str) and connections_str[pos] in ' \t\n,':
+                pos += 1
+
+        return connections
     
     def query_signal(self, signal_name: str, module_name: Optional[str] = None) -> List[Dict]:
         """
