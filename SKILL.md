@@ -1,7 +1,12 @@
 ---
 name: rtl-debugger
+version: 1.5.0
 description: RTL 波形分析调试工具 - 智能流式查询、深度信号分析、AXI4/APB 协议解析
+author: 木叶村克劳
+license: MIT
 homepage: https://github.com/lansongfu/rtl-debugger
+repository: https://github.com/lansongfu/rtl-debugger
+tags: ["RTL", "Verilog", "debug", "waveform", "VCD", "AXI", "APB"]
 metadata: {"clawdbot":{"emoji":"🔬"}}
 ---
 

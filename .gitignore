@@ -3,6 +3,9 @@ __pycache__/
 *.py[cod]
 venv/
 *.egg-info/
+dist/
+build/
+*.egg
 
 # 大文件
 *.vcd
@@ -14,6 +17,12 @@ venv/
 # 配置文件（用户自定义）
 config.yaml
 .rtl_debugger.yaml
+
+# 测试
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
 
 # 其他
 *.log

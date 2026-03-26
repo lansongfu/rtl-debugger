@@ -10,10 +10,14 @@
     "vcdvcd"
   ],
   "skill_doc": "SKILL.md",
+  "main": "src/main.py",
+  "module": "rtl_debugger",
+  "repository": "https://github.com/lansongfu/rtl-debugger",
+  "homepage": "https://github.com/lansongfu/rtl-debugger",
   "entry_points": {
     "console_scripts": [
-      "rtl-debug=src.main:main",
-      "rtl-debugger=src.main:main"
+      "rtl-debug=rtl_debugger.main:main",
+      "rtl-debugger=rtl_debugger.main:main"
     ]
   },
   "python_package": {

@@ -1,7 +1,14 @@
 #!/usr/bin/env python3
 """
 RTL 信号依赖分析器
+
 核心问题：这个信号的跳转变化条件是什么？
+
+使用示例:
+    >>> analyzer = RTLDependencyAnalyzer()
+    >>> analyzer.parse_file('design.v')
+    >>> results = analyzer.query_signal('transfer_done')
+    >>> print(results)
 """
 
 import re
@@ -9,7 +16,7 @@ import os
 import sys
 import json
 from collections import defaultdict
-from typing import Dict, List, Set, Optional
+from typing import Dict, List, Set, Optional, Tuple, Any
 
 # Windows 编码适配：确保 UTF-8 输出
 if sys.platform == 'win32':
