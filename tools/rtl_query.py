@@ -1558,6 +1558,7 @@ if __name__ == '__main__':
     parser.add_argument('--regex', '-r', action='store_true', help='使用正则表达式进行全局搜索')
     parser.add_argument('--full', action='store_true', help='追踪完整依赖树到源头（默认只查上一级）')
     parser.add_argument('--depth', '-d', type=int, default=10, help='最大追踪深度（默认 10）')
+    parser.add_argument('--json', '-j', action='store_true', help='JSON 格式输出（适合机器解析）')
     
     args = parser.parse_args()
     
@@ -1577,9 +1578,18 @@ if __name__ == '__main__':
     
     # 执行查询
     if args.signal:
-        analyzer.print_trace(args.signal, full=args.full)
+        if args.json:
+            # JSON 输出模式
+            results = analyzer.query_signal(args.signal)
+            print(json.dumps(results, indent=2, ensure_ascii=False))
+        else:
+            analyzer.print_trace(args.signal, full=args.full)
     elif args.trace:
-        analyzer.print_trace(args.trace, full=args.full)
+        if args.json:
+            results = analyzer.query_signal(args.trace)
+            print(json.dumps(results, indent=2, ensure_ascii=False))
+        else:
+            analyzer.print_trace(args.trace, full=args.full)
     elif args.cross:
         # 跨模块追踪
         module_name = args.module

@@ -9,7 +9,7 @@ metadata: {"clawdbot":{"emoji":"🔬"}}
 
 > 🎯 **让 AI Agent 都能使用的 RTL 调试工具**  
 > ⚡ 性能：毫秒级查询，30,000 倍加速  
-> 📦 版本：v1.3.0 (标准 Python 包)
+> 📦 版本：v1.5.0 (标准 Python 包)
 
 ---
 

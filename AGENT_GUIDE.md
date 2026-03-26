@@ -1,8 +1,61 @@
 # RTL Debugger - Agent 使用指南
 
 > 🎯 **让 AI Agent 都能使用的 RTL 调试工具**  
-> 📚 版本：v1.4.0  
+> 📚 版本：v1.5.0  
 > ⚡ 性能：毫秒级查询，30,000 倍加速
+
+---
+
+## 🚀 5 分钟快速上手
+
+### 场景 1：查看信号依赖（30 秒）
+
+```bash
+# 1. 解析 Verilog 文件
+./venv/bin/python tools/rtl_query.py src/design.v
+
+# 2. 查询信号依赖
+./venv/bin/python tools/rtl_query.py src/design.v --signal transfer_done
+```
+
+**输出：**
+```
+🔍 信号查询：transfer_done
+📦 模块：dma_ctrl
+   📊 数据信号:
+      ← all_b_received
+```
+
+### 场景 2：全局搜索信号（1 分钟）
+
+```bash
+# 不知道信号在哪个模块？全局搜索！
+./venv/bin/python tools/rtl_query.py --filelist chip.f --global "*transfer*"
+```
+
+**输出：**
+```
+找到 3 个匹配:
+1. top.dma_ctrl.transfer_done
+2. top.axi_master.transfer_done
+3. top.soc_top.transfer_done
+```
+
+### 场景 3：跨模块追踪（2 分钟）
+
+```bash
+# 追踪信号从哪个子模块来
+./venv/bin/python tools/rtl_query.py --filelist design.f --cross data_out --module top
+```
+
+### 场景 4：标准调试流程（5 分钟）
+
+```
+1. VCD 发现异常信号
+2. rtl_query 查上一级依赖（默认单步）
+3. VCD 验证哪个依赖信号异常
+4. 重复步骤 2-3，定位到根因
+```
 
 ---
 
@@ -627,6 +680,69 @@ debugger.run(
    1. 检查 b_valid 的驱动逻辑
    2. 查看相关控制信号
    3. 对比 RTL 预期和 VCD 实际
+```
+
+---
+
+## ❓ 常见问题排查
+
+### 问题 1：文件找不到
+
+**错误：**
+```
+❌ 文件不存在：design.v
+```
+
+**解决：**
+- ✅ 检查文件路径是否正确（相对路径 vs 绝对路径）
+- ✅ 使用 `--filelist` 指定 filelist 文件
+- ✅ 确认工作目录正确
+
+### 问题 2：信号找不到
+
+**错误：**
+```
+❌ 未找到信号 'transfer_done'
+```
+
+**解决：**
+- ✅ 使用 `--global "*transfer*"` 全局搜索
+- ✅ 检查大小写（Verilog 区分大小写）
+- ✅ 使用 `--module` 指定模块名
+
+### 问题 3：解析失败
+
+**错误：**
+```
+Syntax error in line XX
+```
+
+**解决：**
+- ✅ 检查 Verilog 语法是否正确
+- ✅ 确认不支持的语法（如某些 SystemVerilog 特性）
+- ✅ 尝试简化测试（最小可复现代码）
+
+### 问题 4：跨模块追踪结果为空
+
+**错误：**
+```
+📍 边界：module_boundary
+📝 摘要：未找到跨模块连接
+```
+
+**解决：**
+- ✅ 确认模块实例化正确
+- ✅ 检查端口连接是否匹配
+- ✅ 使用 `--global` 确认信号位置
+
+### 问题 5：依赖链不完整
+
+**原因：** 默认只查上一级（单步模式）
+
+**解决：**
+```bash
+# 使用 --full 查看完整依赖链
+rtl_query.py --filelist design.f --signal data_out --full
 ```
 
 ---

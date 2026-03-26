@@ -2,12 +2,13 @@
 RTL Debugger - 标准包接口
 
 使用方式:
-    from rtl_debugger import analyze_axi4, analyze_pulse, InteractiveDebugger
+    from rtl_debugger import analyze_axi4, analyze_pulse, InteractiveDebugger, RTLDependencyAnalyzer
 
 功能:
 - 深度信号分析：脉冲/时钟/总线/状态机
 - 协议解析：AXI4/APB/AHB
 - 交互式调试：自动追踪根因
+- RTL 依赖分析：单步/完整/跨模块追踪
 """
 
 import sys
@@ -40,6 +41,9 @@ from vcd_smart import VCDSmartStream
 # 导入交互式调试器
 from interactive_debugger import InteractiveDebugger
 
+# 导入 RTL 依赖分析器
+from rtl_query import RTLDependencyAnalyzer
+
 # 导出所有公共 API
 __all__ = [
     # 深度分析
@@ -55,7 +59,8 @@ __all__ = [
     
     # 工具类
     'VCDSmartStream',
-    'InteractiveDebugger'
+    'InteractiveDebugger',
+    'RTLDependencyAnalyzer'
 ]
 
 # 版本信息
