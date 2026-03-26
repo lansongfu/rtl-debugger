@@ -150,8 +150,10 @@ class RTLDependencyAnalyzer:
             # 解析端口
             ports = self._parse_ports(port_section)
             
-            # 解析依赖关系
-            deps = self._parse_dependencies(body)
+            # 解析依赖关系（返回结构化和扁平两种）
+            deps_result = self._parse_dependencies(body)
+            flat_deps = deps_result['flat']
+            raw_deps = deps_result['raw']
             
             # 解析实例化
             instances = self._parse_instances(body)
@@ -159,7 +161,8 @@ class RTLDependencyAnalyzer:
             modules[mod_name] = {
                 'file': filepath,
                 'ports': ports,
-                'dependencies': deps,
+                'dependencies': flat_deps,
+                'raw_dependencies': raw_deps,
                 'instances': instances
             }
         
@@ -223,8 +226,16 @@ class RTLDependencyAnalyzer:
         
         return ports
     
-    def _parse_dependencies(self, body: str) -> Dict[str, List[str]]:
-        """解析信号依赖关系（增强版：支持 always 块时序逻辑）"""
+    def _parse_dependencies(self, body: str) -> Dict:
+        """
+        解析信号依赖关系（增强版：支持 always 块时序逻辑，区分数据信号和控制信号）
+        
+        返回:
+            {
+                'flat': Dict[str, List[str]],    # 扁平化依赖（向后兼容）
+                'raw': Dict[str, List[Dict]]     # 原始结构化依赖
+            }
+        """
         deps = defaultdict(list)
         
         # 1. 解析 assign 语句（组合逻辑）
@@ -237,16 +248,33 @@ class RTLDependencyAnalyzer:
             if lhs_signal:
                 lhs_name = lhs_signal.group(1)
                 rhs_signals = self._extract_signals(rhs)
-                deps[lhs_name] = list(set(rhs_signals))
+                # assign 语句通常没有控制信号，全部是数据信号
+                deps[lhs_name].append({
+                    'signals': list(set(rhs_signals)),
+                    'control_signals': [],
+                    'type': 'assign'
+                })
         
         # 2. 解析 always 块（时序逻辑 + 组合逻辑）
-        # 增强：提取时钟、复位、使能信息
+        # 增强：提取时钟、复位、使能、控制信号信息
         always_blocks = self._extract_always_blocks(body)
         
         for always_info in always_blocks:
             sensitivity = always_info['sensitivity']  # 敏感列表
             block = always_info['block']  # 块内容
             is_sequential = always_info['is_sequential']  # 是否时序逻辑
+            
+            # 提取整个 always 块的控制信号（一次性提取，避免重复）
+            block_control_info = self._extract_control_signals(block)
+            block_control_signals = set(block_control_info.get('control_signals', []))
+            block_conditions = block_control_info.get('conditions', [])
+            
+            # 收集块内所有被赋值信号的依赖
+            block_assignments = defaultdict(lambda: {
+                'data_signals': set(),
+                'control_signals': block_control_signals.copy(),
+                'conditions': block_conditions.copy()
+            })
             
             # 时序逻辑分析
             if is_sequential:
@@ -262,23 +290,24 @@ class RTLDependencyAnalyzer:
                     rhs = nba_match.group(2)
                     rhs_signals = self._extract_signals(rhs)
                     
-                    # 添加元数据
-                    if lhs not in deps:
-                        deps[lhs] = []
-                    
-                    # 存储为结构化依赖
+                    # 从数据信号中移除控制信号（避免重复）
+                    data_signals = [s for s in rhs_signals if s not in block_control_signals]
+                    block_assignments[lhs]['data_signals'].update(data_signals)
+                
+                # 存储为结构化依赖（每个信号只存储一次，合并所有赋值来源）
+                for lhs, info in block_assignments.items():
                     dep_info = {
-                        'signals': list(set(rhs_signals)),
+                        'signals': list(info['data_signals']),
+                        'control_signals': list(info['control_signals']),
                         'type': 'sequential',
                         'clk': clk_signal,
                         'rst': rst_signal,
                         'rst_type': rst_type
                     }
                     
-                    # 检查是否有使能条件
-                    enable_signals = self._extract_enable_conditions(block, lhs)
-                    if enable_signals:
-                        dep_info['enable'] = enable_signals
+                    # 保存条件详情
+                    if info['conditions']:
+                        dep_info['conditions'] = info['conditions']
                     
                     deps[lhs].append(dep_info)
             
@@ -289,25 +318,39 @@ class RTLDependencyAnalyzer:
                 for ba_match in re.finditer(ba_pattern, block):
                     lhs = ba_match.group(1)
                     rhs = ba_match.group(2)
-                    if lhs not in deps:
-                        rhs_signals = self._extract_signals(rhs)
-                        deps[lhs] = list(set(rhs_signals))
+                    rhs_signals = self._extract_signals(rhs)
+                    
+                    # 从数据信号中移除控制信号
+                    data_signals = [s for s in rhs_signals if s not in block_control_signals]
+                    block_assignments[lhs]['data_signals'].update(data_signals)
+                
+                # 存储为结构化依赖
+                for lhs, info in block_assignments.items():
+                    dep_info = {
+                        'signals': list(info['data_signals']),
+                        'control_signals': list(info['control_signals']),
+                        'type': 'combinational'
+                    }
+                    
+                    if info['conditions']:
+                        dep_info['conditions'] = info['conditions']
+                    
+                    deps[lhs].append(dep_info)
         
         # 3. 扁平化依赖（保持向后兼容）
         flat_deps = {}
         for lhs, dep_list in deps.items():
-            if isinstance(dep_list[0], dict) if dep_list else False:
-                # 有时序信息，合并所有信号
+            if dep_list and isinstance(dep_list[0], dict):
+                # 合并所有信号（数据 + 控制）
                 all_signals = []
                 for dep in dep_list:
                     all_signals.extend(dep.get('signals', []))
-                    if 'enable' in dep:
-                        all_signals.extend(dep['enable'])
+                    all_signals.extend(dep.get('control_signals', []))
                 flat_deps[lhs] = list(set(all_signals))
             else:
                 flat_deps[lhs] = dep_list
         
-        return flat_deps
+        return {'flat': flat_deps, 'raw': dict(deps)}
     
     def _extract_always_blocks(self, body: str) -> List[Dict]:
         """
@@ -323,15 +366,38 @@ class RTLDependencyAnalyzer:
         """
         always_blocks = []
         
-        # 匹配 always 块
-        # always @(posedge clk or posedge rst) begin ... end
-        # always @(*) begin ... end
-        # always #10 begin ... end
-        always_pattern = r'always\s+(?:@\s*\(([^)]*)\)|#\d+)\s*(?:begin(.*?)end|([^;]+);)'
+        # 找到所有 always 关键字的位置
+        always_starts = list(re.finditer(r'\balways\s+', body))
         
-        for match in re.finditer(always_pattern, body, re.DOTALL):
-            sensitivity = match.group(1) or ''
-            block = match.group(2) if match.group(2) else match.group(3) or ''
+        for start_match in always_starts:
+            start_pos = start_match.end()
+            
+            # 查找敏感列表
+            sensitivity = ''
+            rest_start = start_pos
+            
+            # 检查是否有 @(sensitivity)
+            at_match = re.match(r'@\s*\(([^)]*)\)', body[start_pos:])
+            if at_match:
+                sensitivity = at_match.group(1).strip()
+                rest_start = start_pos + at_match.end()
+            elif re.match(r'#\d+', body[start_pos:]):
+                # 延迟形式 always #10
+                delay_match = re.match(r'#\d+', body[start_pos:])
+                rest_start = start_pos + delay_match.end()
+            
+            # 提取块内容
+            rest = body[rest_start:].lstrip()
+            block = ''
+            
+            if rest.startswith('begin'):
+                # 使用平衡匹配提取完整的 begin-end 块
+                block = self._extract_balanced_block(rest, 'begin', 'end')
+            else:
+                # 单行语句：always @(*) statement;
+                stmt_match = re.match(r'([^;]*;)', rest)
+                if stmt_match:
+                    block = stmt_match.group(1)
             
             # 判断是否时序逻辑
             is_sequential = False
@@ -348,21 +414,12 @@ class RTLDependencyAnalyzer:
                 if clk_match:
                     clk_signal = clk_match.group(2)
                 
-                # 检查是否有复位
-                rst_match = re.search(r'(?:posedge|negedge)\s+(\w+)', sensitivity)
-                if rst_match and rst_match.group(1) != clk_signal:
-                    rst_signal = rst_match.group(1)
-                    
-                    # 判断同步/异步复位
-                    if 'posedge' in sensitivity and 'negedge' in sensitivity:
-                        # 混合边沿触发，通常是异步复位
-                        rst_type = 'async'
-                    else:
-                        # 检查块内是否有 if (!rst) 或 if (rst)
-                        if re.search(rf'if\s*\(\s*!?{rst_signal}\s*\)', block):
-                            rst_type = 'async'
-                        else:
-                            rst_type = 'sync'
+                # 检查是否有复位（第二个边沿触发的信号）
+                edge_matches = re.findall(r'(posedge|negedge)\s+(\w+)', sensitivity)
+                if len(edge_matches) > 1:
+                    # 第二个边沿信号通常是复位
+                    rst_signal = edge_matches[1][1]
+                    rst_type = 'async'
             
             # 组合逻辑 always (@(*) 或 @*)
             elif sensitivity.strip() in ['*', 'posedge', 'negedge']:
@@ -379,25 +436,151 @@ class RTLDependencyAnalyzer:
         
         return always_blocks
     
+    def _extract_balanced_block(self, text: str, start_kw: str, end_kw: str) -> str:
+        """
+        提取平衡的关键字块（如 begin-end）
+        处理嵌套情况
+        """
+        if not text.startswith(start_kw):
+            return ''
+        
+        depth = 0
+        i = 0
+        n = len(text)
+        
+        while i < n:
+            # 检查是否是关键字
+            if text[i:].startswith(start_kw) and (i + len(start_kw) >= n or not text[i + len(start_kw)].isalnum() and text[i + len(start_kw)] != '_'):
+                depth += 1
+                i += len(start_kw)
+            elif text[i:].startswith(end_kw) and (i + len(end_kw) >= n or not text[i + len(end_kw)].isalnum() and text[i + len(end_kw)] != '_'):
+                depth -= 1
+                i += len(end_kw)
+                if depth == 0:
+                    return text[:i]
+            else:
+                i += 1
+        
+        return text  # 如果找不到匹配的 end，返回全部
+    
     def _extract_enable_conditions(self, block: str, target_signal: str) -> List[str]:
         """
-        提取目标信号的使能条件
+        提取目标信号的使能条件（已废弃，使用 _extract_control_signals）
         分析：if (enable) target <= value;
         """
-        enable_signals = []
+        control_info = self._extract_control_signals(block, target_signal)
+        return control_info.get('control_signals', [])
+    
+    def _extract_control_signals(self, block: str, target_signal: str = None) -> Dict:
+        """
+        提取 always 块中的控制信号
         
-        # 查找包含目标信号的赋值语句
-        # if (...) target <= ...
-        # if (...) begin ... target <= ... end
-        pattern = rf'if\s*\(([^)]+)\)\s*(?:begin\s*)?.*?{re.escape(target_signal)}\s*<='
+        分析 if/case 条件，提取：
+        - 控制信号（如 rst_n, cmd_valid, cmd_ready, enable）
+        - 条件类型（if/case/casex/casez）
+        - 条件表达式
         
-        for match in re.finditer(pattern, block, re.DOTALL):
-            condition = match.group(1)
-            # 从条件中提取信号
-            signals = self._extract_signals(condition)
-            enable_signals.extend(signals)
+        返回:
+        {
+            'control_signals': ['rst_n', 'cmd_valid', ...],
+            'conditions': [
+                {'type': 'if', 'expression': '!rst_n', 'signals': ['rst_n']},
+                {'type': 'case', 'expression': 'state', 'signals': ['state']},
+                ...
+            ]
+        }
+        """
+        control_signals = set()
+        conditions = []
         
-        return list(set(enable_signals))
+        # 1. 提取 if 条件中的控制信号
+        # if (condition) 或 if (!condition) 或 if (a && b) 或 if (a || b)
+        if_pattern = r'if\s*\(([^)]+)\)'
+        for match in re.finditer(if_pattern, block):
+            condition_expr = match.group(1).strip()
+            signals = self._extract_signals(condition_expr)
+            
+            # 过滤掉目标信号本身（避免自引用）
+            if target_signal:
+                signals = [s for s in signals if s != target_signal]
+            
+            control_signals.update(signals)
+            conditions.append({
+                'type': 'if',
+                'expression': condition_expr,
+                'signals': signals
+            })
+        
+        # 2. 提取 else if 条件
+        elseif_pattern = r'else\s+if\s*\(([^)]+)\)'
+        for match in re.finditer(elseif_pattern, block):
+            condition_expr = match.group(1).strip()
+            signals = self._extract_signals(condition_expr)
+            if target_signal:
+                signals = [s for s in signals if s != target_signal]
+            control_signals.update(signals)
+            conditions.append({
+                'type': 'elseif',
+                'expression': condition_expr,
+                'signals': signals
+            })
+        
+        # 3. 提取 case 条件中的控制信号
+        # case (expr) 或 case expr
+        case_pattern = r'\b(case|casex|casez)\s*(?:\(([^)]+)\)|(\w+))'
+        for match in re.finditer(case_pattern, block):
+            case_type = match.group(1)
+            case_expr = match.group(2) if match.group(2) else match.group(3)
+            if case_expr:
+                case_expr = case_expr.strip()
+                signals = self._extract_signals(case_expr)
+                
+                if target_signal:
+                    signals = [s for s in signals if s != target_signal]
+                
+                control_signals.update(signals)
+                conditions.append({
+                    'type': case_type,
+                    'expression': case_expr,
+                    'signals': signals
+                })
+        
+        # 4. 提取 case 分支中的控制信号（如 state == IDLE）
+        # 匹配 case_item: 的形式，提取其中的比较信号
+        case_item_pattern = r'\b(\w+)\s*:\s*(?:begin)?'
+        for match in re.finditer(case_item_pattern, block):
+            item = match.group(1)
+            # 只提取非关键字、非数字的标识符
+            if item not in ['default', 'begin', 'end'] and not item.isdigit():
+                # 这可能是 case 分支值，检查是否有比较表达式
+                pass
+        
+        # 5. 特殊控制信号模式检测
+        # 检测常见的控制信号命名模式
+        control_patterns = [
+            r'(\w*_valid)\b',      # xxx_valid
+            r'(\w*_ready)\b',      # xxx_ready
+            r'(\w*_enable)\b',     # xxx_enable
+            r'(\w*_en)\b',         # xxx_en
+            r'(\w*_rst)\b',        # xxx_rst
+            r'(rst_?\w*)\b',       # rst_xxx 或 rstxxx
+            r'(\w*_n)\b',          # xxx_n (低电平有效)
+            r'(\w*_sel)\b',        # xxx_sel
+            r'(\w*_ack)\b',        # xxx_ack
+            r'(\w*_req)\b',        # xxx_req
+        ]
+        
+        for pattern in control_patterns:
+            for match in re.finditer(pattern, block):
+                sig = match.group(1)
+                # 确保是有效信号名
+                if re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', sig):
+                    control_signals.add(sig)
+        
+        return {
+            'control_signals': list(control_signals),
+            'conditions': conditions
+        }
     
     def _extract_signals(self, expression: str) -> List[str]:
         """从表达式中提取信号名"""
@@ -467,6 +650,8 @@ class RTLDependencyAnalyzer:
         """
         查询信号的依赖关系
         核心问题：这个信号的跳转变化条件是什么？
+        
+        返回结构化信息，区分数据信号和控制信号
         """
         results = []
         
@@ -481,7 +666,9 @@ class RTLDependencyAnalyzer:
             
             # 检查信号是否存在
             if signal_name in mod_info['ports'] or signal_name in mod_info['dependencies']:
-                deps = mod_info['dependencies'].get(signal_name, [])
+                # 获取原始依赖列表（可能有结构化信息）
+                raw_deps = self._get_raw_dependencies(mod_name, signal_name)
+                flat_deps = mod_info['dependencies'].get(signal_name, [])
                 port_info = mod_info['ports'].get(signal_name, {})
                 
                 results.append({
@@ -489,11 +676,26 @@ class RTLDependencyAnalyzer:
                     'signal': signal_name,
                     'type': 'port' if signal_name in mod_info['ports'] else 'internal',
                     'direction': port_info.get('direction', 'internal'),
-                    'dependencies': deps,
-                    'driver': 'assign/always' if deps else 'primary_input'
+                    'dependencies': flat_deps,
+                    'structured_deps': raw_deps,
+                    'driver': 'assign/always' if flat_deps else 'primary_input'
                 })
         
         return results
+    
+    def _get_raw_dependencies(self, module_name: str, signal_name: str) -> List[Dict]:
+        """
+        获取信号的原始结构化依赖信息
+        包含数据信号、控制信号、时序信息等
+        """
+        if module_name not in self.modules:
+            return []
+        
+        mod_info = self.modules[module_name]
+        
+        # 从原始解析结果中获取（需要存储结构化信息）
+        # 目前返回空列表，后续需要修改 _parse_modules 来存储原始依赖
+        return mod_info.get('raw_dependencies', {}).get(signal_name, [])
     
     def trace_signal(self, signal_name: str, max_depth: int = 5) -> List[Dict]:
         """
@@ -564,7 +766,7 @@ class RTLDependencyAnalyzer:
         return chain
     
     def print_trace(self, signal_name: str, module_name: Optional[str] = None) -> None:
-        """打印信号追踪结果（增强版：显示时序信息）"""
+        """打印信号追踪结果（增强版：区分数据信号和控制信号）"""
         results = self.query_signal(signal_name, module_name)
         
         if not results:
@@ -579,12 +781,60 @@ class RTLDependencyAnalyzer:
             print(f"   类型：{r['type']} ({r['direction']})")
             print(f"   驱动：{r['driver']}")
             
-            if r['dependencies']:
-                print(f"   变化条件:")
-                for dep in r['dependencies']:
-                    print(f"      ← {dep}")
+            # 获取结构化依赖信息
+            structured_deps = r.get('structured_deps', [])
+            
+            if structured_deps:
+                # 有结构化信息，区分显示
+                for dep_info in structured_deps:
+                    dep_type = dep_info.get('type', 'unknown')
+                    
+                    # 显示时序信息
+                    if dep_type == 'sequential':
+                        clk = dep_info.get('clk')
+                        rst = dep_info.get('rst')
+                        rst_type = dep_info.get('rst_type')
+                        
+                        if clk:
+                            print(f"   ⏰ 时钟：{clk}")
+                        if rst:
+                            rst_label = '同步复位' if rst_type == 'sync' else '异步复位'
+                            print(f"   🔄 {rst_label}：{rst}")
+                    
+                    # 区分数据信号和控制信号
+                    data_signals = dep_info.get('signals', [])
+                    control_signals = dep_info.get('control_signals', [])
+                    conditions = dep_info.get('conditions', [])
+                    
+                    if control_signals:
+                        print(f"   🎛️  控制信号:")
+                        for ctrl in control_signals:
+                            print(f"      ⚡ {ctrl}")
+                    
+                    if conditions:
+                        print(f"   📋 条件表达式:")
+                        for cond in conditions:
+                            cond_type = cond.get('type', 'if')
+                            expr = cond.get('expression', '')
+                            sigs = cond.get('signals', [])
+                            print(f"      [{cond_type}] {expr}")
+                            if sigs and len(sigs) > 1:
+                                print(f"              信号: {', '.join(sigs)}")
+                    
+                    if data_signals:
+                        print(f"   📊 数据信号:")
+                        for sig in data_signals:
+                            print(f"      ← {sig}")
+                    elif not control_signals and not conditions:
+                        print(f"   变化条件：无 (原始输入)")
             else:
-                print(f"   变化条件：无 (原始输入)")
+                # 无结构化信息，使用扁平列表
+                if r['dependencies']:
+                    print(f"   依赖信号:")
+                    for dep in r['dependencies']:
+                        print(f"      ← {dep}")
+                else:
+                    print(f"   变化条件：无 (原始输入)")
         
         # 递归追踪
         print(f"\n🔗 完整依赖链:")

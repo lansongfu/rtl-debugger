@@ -1,8 +1,121 @@
 # RTL Debugger - Agent 使用指南
 
 > 🎯 **让 AI Agent 都能使用的 RTL 调试工具**  
-> 📚 版本：v1.2.0  
+> 📚 版本：v1.3.0  
 > ⚡ 性能：毫秒级查询，30,000 倍加速
+
+---
+
+## 🎯 工具选择决策树（必读！）
+
+**根据你的任务类型，快速选择正确工具：**
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  你的任务是什么？                                            │
+└─────────────────────────────────────────────────────────────┘
+                          │
+        ┌─────────────────┼─────────────────┐
+        ▼                 ▼                 ▼
+   查看波形           分析 RTL 代码        智能诊断
+   (VCD 文件)          (Verilog 源文件)     (自动找根因)
+        │                 │                 │
+        ▼                 ▼                 ▼
+┌───────────────┐  ┌───────────────┐  ┌─────────────────┐
+│ VCDSmartStream│  │ rtl_query.py  │  │ interactive_    │
+│ - query_window│  │ --signal      │  │ debug_analyzer  │
+│ - analyze_    │  │ --trace       │  │ --expected      │
+│   behavior    │  │               │  │                 │
+└───────────────┘  └───────────────┘  └─────────────────┘
+        │                 │                 │
+        ▼                 ▼                 ▼
+   0.2-2ms           0.04s              1.8s
+   极快！             快速               完整诊断
+```
+
+### 📋 快速参考表
+
+| 任务类型 | 推荐工具 | 调用方式 | 耗时 |
+|----------|----------|----------|------|
+| **查看信号值变化** | `VCDSmartStream.query_window()` | Python API | 0.2-2ms |
+| **分析信号是否正常** | `VCDSmartStream.analyze_behavior()` | Python API | 1-5ms |
+| **追踪信号根因** | `InteractiveDebugger.run()` | Python API | 1-2s |
+| **查 RTL 驱动关系** | `rtl_query.py --signal` | 命令行 | 0.04s |
+| **AXI 协议分析** | `analyze_axi4()` | Python API | 50-100ms |
+| **脉冲/时钟分析** | `analyze_pulse()` / `analyze_clock()` | Python API | 1-10ms |
+| **Bug 自动诊断** | `interactive_debug_analyzer.py` | 命令行 | 1-2s |
+
+---
+
+## 🔧 rtl_query.py - RTL 依赖分析工具（独立使用指南）
+
+**核心问题：** 这个信号的跳转变化条件是什么？谁驱动了它？
+
+### 安装后位置
+```
+/root/.openclaw/workspace/skills/rtl-debugger/tools/rtl_query.py
+```
+
+### 命令行调用（推荐）
+
+```bash
+# 方式 1: 直接指定 Verilog 文件
+./venv/bin/python tools/rtl_query.py src/design.v --signal transfer_done
+
+# 方式 2: 使用 filelist（多文件项目）
+./venv/bin/python tools/rtl_query.py --filelist src/filelist.f --signal transfer_done
+
+# 方式 3: 递归追踪依赖链
+./venv/bin/python tools/rtl_query.py --filelist src/filelist.f --trace transfer_done
+```
+
+### 输出示例
+
+```
+🔍 信号查询：transfer_done
+
+transfer_done ← all_b_received
+  驱动类型：sequential (时序逻辑)
+  时钟：clk (posedge)
+  复位：rst_n (negedge, async)
+  使能条件：cmd_valid, cmd_ready
+
+all_b_received ← rx_byte_cnt, CMD_B_BYTES
+  驱动类型：combinational (组合逻辑)
+  条件：state == READ_B
+```
+
+### Python API 调用
+
+```python
+import sys
+sys.path.insert(0, 'tools')
+from rtl_query import RTLDependencyAnalyzer
+
+analyzer = RTLDependencyAnalyzer()
+analyzer.parse_file('src/design.v')
+
+# 查询信号依赖
+deps = analyzer.get_signal_deps('transfer_done')
+print(deps)
+
+# 递归追踪
+chain = analyzer.trace_dependency('transfer_done')
+print(chain)
+```
+
+### 支持的解析特性
+
+✅ 基础 assign/always 解析  
+✅ 嵌套 filelist（无限层）  
+✅ 环境变量支持（$VAR / ${VAR}）  
+✅ `define 宏展开  
+✅ parameter/localparam  
+✅ `include 文件包含  
+✅ generate for/if块  
+✅ 时序逻辑条件提取（if/case 使能）  
+✅ 时钟/复位信号识别  
+✅ 循环依赖检测  
 
 ---
 
