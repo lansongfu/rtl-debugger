@@ -1,6 +1,6 @@
 {
   "name": "rtl-debugger",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "description": "RTL 波形分析调试工具 v5 - 智能流式查询 + 深度分析 + 协议解析",
   "author": "木叶村克劳",
   "license": "MIT",
