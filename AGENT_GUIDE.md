@@ -6,6 +6,95 @@
 
 ---
 
+## ⚠️ 调用前必读（Agent 重要指南）
+
+### 📥 必要输入参数
+
+**使用本技能前，必须获取：**
+
+| 参数 | 必需 | 说明 | 如何获取 |
+|------|------|------|----------|
+| **filelist 路径** | ✅ 必需 | RTL 文件列表 | 用户未提供时主动询问 |
+| **信号名称** | ✅ 必需 | 要分析的信号 | 用户输入中通常包含 |
+| **VCD 文件路径** | ⚠️ 可选 | 波形文件 | 需要波形分析时询问 |
+
+### 🤖 交互式询问流程
+
+**场景 1：用户未提供 filelist**
+
+```
+用户："transfer_done 信号为什么没变化？"
+
+Agent 思考：
+  - 用户要分析 RTL 信号依赖
+  - 但没有提供 filelist 路径
+  - 需要询问用户
+
+Agent 回复：
+"请提供 filelist 文件路径，例如：
+   - sim/filelist.f
+   - run.f
+   - compile.f
+
+或者提供项目根目录，我可以自动查找。"
+```
+
+**场景 2：用户未提供 VCD（需要波形分析）**
+
+```
+用户："axi_wvalid 在 t=1000ns 应该拉高，但没反应"
+
+Agent 思考：
+  - 用户需要波形分析
+  - 但没有提供 VCD 文件路径
+  - 需要询问用户
+
+Agent 回复：
+"请提供 VCD 波形文件路径，例如：
+   - sim/output/testbench.vcd
+   - waves/simulation.vcd
+
+或者提供仿真输出目录，我可以自动查找。"
+```
+
+**场景 3：用户提供了所有信息**
+
+```
+用户："帮我看看 transfer_done 信号，filelist 是 sim/filelist.f"
+
+Agent 思考：
+  - filelist 已提供 ✅
+  - 信号名称已提供 ✅
+  - 可以直接调用技能
+
+Agent 操作：
+rtl_query.py --filelist sim/filelist.f --signal transfer_done
+```
+
+### ❌ 常见错误
+
+**错误 1：缺少 filelist 直接调用**
+```python
+# ❌ 错误：filelist 从哪里来？
+rtl_query.py --signal transfer_done
+```
+
+**错误 2：使用不存在的默认路径**
+```python
+# ❌ 错误：假设 filelist 存在
+rtl_query.py --filelist design.f --signal transfer_done
+# 文件可能根本不存在！
+```
+
+**错误 3：不询问用户就跳过 VCD 分析**
+```python
+# ❌ 错误：用户需要波形分析，但跳过了
+# 用户："axi_wvalid 在 t=1000ns 应该拉高"
+# Agent 只查了 RTL 依赖，没看波形
+```
+
+---
+
 ## 🚀 5 分钟快速上手
 
 ### 场景 1：查看信号依赖（30 秒）

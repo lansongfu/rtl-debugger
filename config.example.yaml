@@ -1,0 +1,40 @@
+# RTL Debugger 配置文件模板
+
+# 复制此文件到 ~/.rtl_debugger/config.yaml 或项目根目录的 .rtl_debugger.yaml
+
+# 默认项目
+default_project: chip_v1
+
+# 项目列表
+projects:
+  chip_v1:
+    name: "芯片 V1 项目"
+    root: /home/user/chip_design
+    filelist: sim/filelist.f
+    vcd_dir: sim/output
+    default_vcd: sim/output/testbench.vcd
+  
+  chip_v2:
+    name: "芯片 V2 项目"
+    root: /home/user/chip_v2
+    filelist: run.f
+    vcd_dir: waves/
+    default_vcd: waves/simulation.vcd
+
+# 常用路径（可选）
+common_paths:
+  filelist_candidates:
+    - sim/filelist.f
+    - run.f
+    - compile.f
+    - filelist.f
+  
+  vcd_patterns:
+    - sim/output/*.vcd
+    - waves/*.vcd
+    - output/*.vcd
+
+# 使用方式：
+# 1. 复制此文件到 ~/.rtl_debugger/config.yaml
+# 2. 修改项目路径为你实际的路径
+# 3. Agent 会自动读取配置文件获取默认路径

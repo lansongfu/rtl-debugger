@@ -9,6 +9,11 @@ venv/
 *.fsdb
 *.shm
 *.vvp
+*.wdb
+
+# 配置文件（用户自定义）
+config.yaml
+.rtl_debugger.yaml
 
 # 其他
 *.log

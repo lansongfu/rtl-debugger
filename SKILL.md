@@ -13,6 +13,68 @@ metadata: {"clawdbot":{"emoji":"🔬"}}
 
 ---
 
+## 📥 输入要求（必读！）
+
+**使用本技能前，必须获取以下信息：**
+
+| 参数 | 必需 | 说明 | 常见值 |
+|------|------|------|--------|
+| **filelist 路径** | ✅ 必需 | RTL 文件列表 | `sim/filelist.f`, `run.f`, `compile.f` |
+| **VCD 文件路径** | ⚠️ 可选 | 波形文件（用于波形分析） | `sim/output/testbench.vcd`, `waves/*.vcd` |
+| **信号名称** | ✅ 必需 | 要分析的信号名 | `transfer_done`, `axi_wvalid` |
+
+---
+
+## 🤖 Agent 调用指南（重要！）
+
+### 第一步：检查必要信息
+
+在调用本技能前，**必须确认**：
+1. ✅ filelist 文件路径
+2. ✅ 信号名称
+3. ⚠️ VCD 文件路径（如果需要波形分析）
+
+### 第二步：缺少信息时主动询问
+
+**如果用户没有提供 filelist：**
+```
+❌ 错误做法：直接调用技能（会失败）
+✅ 正确做法：询问用户
+
+"请提供 filelist 文件路径，例如：
+   - sim/filelist.f
+   - run.f
+   - compile.f
+   
+或者提供项目根目录，我可以自动查找。"
+```
+
+**如果用户没有提供 VCD（需要波形分析时）：**
+```
+❌ 错误做法：跳过 VCD 分析
+✅ 正确做法：询问用户
+
+"请提供 VCD 波形文件路径，例如：
+   - sim/output/testbench.vcd
+   - waves/simulation.vcd
+   
+或者提供仿真输出目录，我可以自动查找。"
+```
+
+### 第三步：调用技能
+
+获取到必要信息后，根据任务类型选择合适的工具：
+
+| 任务 | 工具 | 示例 |
+|------|------|------|
+| 查 RTL 依赖 | `rtl_query.py --signal` | `rtl_query.py -f design.f -s transfer_done` |
+| 全局搜索 | `rtl_query.py --global` | `rtl_query.py -f design.f -g "*valid*"` |
+| 跨模块追踪 | `rtl_query.py --cross` | `rtl_query.py -f design.f -c data_out -m top` |
+| VCD 波形查询 | `VCDSmartStream` | Python API |
+| 协议分析 | `analyze_axi4` | Python API |
+
+---
+
 ## 📋 技能描述
 
 **RTL Debugger** 是一个专业的 RTL 波形分析调试工具，为 AI Agent 提供：
@@ -126,9 +188,80 @@ python -m rtl_debugger --help
 
 ---
 
-## 🚀 使用示例
+## 📚 完整示例
 
-### 场景 1: 信号行为分析
+### 示例 1: 用户主动提供所有信息
+
+**用户输入：**
+```
+帮我看看 transfer_done 信号，filelist 是 sim/filelist.f
+```
+
+**Agent 操作：**
+```bash
+rtl_query.py --filelist sim/filelist.f --signal transfer_done
+```
+
+---
+
+### 示例 2: 用户未提供 filelist（需要询问）
+
+**用户输入：**
+```
+transfer_done 信号为什么没变化？
+```
+
+**Agent 操作：**
+```
+❌ 错误：直接调用技能
+
+✅ 正确：询问用户
+"请提供 filelist 文件路径，例如 sim/filelist.f 或 run.f"
+```
+
+**用户提供后：**
+```
+sim/filelist.f
+```
+
+**Agent 操作：**
+```bash
+rtl_query.py --filelist sim/filelist.f --signal transfer_done
+```
+
+---
+
+### 示例 3: 需要 VCD 波形分析
+
+**用户输入：**
+```
+axi_wvalid 在 t=1000ns 应该拉高，但没反应
+```
+
+**Agent 操作：**
+```
+✅ 正确：询问 VCD 路径
+"请提供 VCD 波形文件路径，例如 sim/output/testbench.vcd"
+```
+
+**用户提供后：**
+```
+sim/output/testbench.vcd
+```
+
+**Agent 操作：**
+```python
+from rtl_debugger import VCDSmartStream
+
+with VCDSmartStream('sim/output/testbench.vcd') as q:
+    q.parse_header_fast()
+    changes = q.query_window('axi_wvalid', 0, 2000000)
+    print(f"axi_wvalid 变化：{changes}")
+```
+
+---
+
+## 🚀 使用示例
 
 ```python
 from rtl_debugger import analyze_clock
